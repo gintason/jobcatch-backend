@@ -27,5 +27,4 @@ class Migration(migrations.Migration):
 
     operations = [
         CreateExtension("postgis"),
-        CreateExtension("vector"),   # pgvector — used by the AI chatbot KB (Phase 3)
     ]
