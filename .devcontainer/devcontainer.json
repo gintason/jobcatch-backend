@@ -1,0 +1,38 @@
+{
+  "name": "JobCatch Backend",
+
+  // Reuse the existing docker-compose (PostGIS + Redis + backend + GDAL).
+  "dockerComposeFile": "../docker-compose.yml",
+  "service": "backend",
+  "workspaceFolder": "/app",
+
+  // Keep the container alive so you run commands manually (instead of auto-runserver).
+  "overrideCommand": true,
+
+  // Create a dev .env on the host BEFORE compose starts, so config is present.
+  "initializeCommand": "cp -n .env.example .env || true",
+
+  // After the container builds: migrate the DB and seed demo data.
+  "postCreateCommand": "bash .devcontainer/setup.sh",
+
+  // Expose the Django dev server to your browser.
+  "forwardPorts": [8000],
+  "portsAttributes": {
+    "8000": { "label": "Django API", "onAutoForward": "openBrowser" }
+  },
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "charliermarsh.ruff"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "/usr/local/bin/python"
+      }
+    }
+  },
+
+  "remoteUser": "root"
+}
