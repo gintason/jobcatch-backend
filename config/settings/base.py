@@ -56,6 +56,7 @@ LOCAL_APPS = [
     "apps.messaging",
     "apps.notifications",
     "apps.verification",
+    "apps.matching",
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
@@ -206,6 +207,15 @@ SUBSCRIPTION_PRICES = {                       # Naira
 PAYMENT_CALLBACK_URL = env(
     "PAYMENT_CALLBACK_URL", default="https://jobcatchonline.com/payments/callback"
 )
+
+# --- Geo-matching engine ---
+MATCHING_DEFAULT_RADIUS_KM = 20
+MATCHING_WEIGHTS = {          # must sum to 1.0; tune without code changes
+    "proximity": 0.40,
+    "rating": 0.30,
+    "featured": 0.20,         # subscription-driven visibility boost
+    "verified": 0.10,
+}
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 LANGUAGE_CODE = "en-us"

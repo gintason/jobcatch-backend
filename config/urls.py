@@ -17,6 +17,7 @@ urlpatterns = [
     path("api/v1/", include("apps.subscriptions.urls")),   # subscription history
     path("api/v1/", include("apps.verification.urls")),    # verification workflow
     path("api/v1/", include("apps.notifications.urls")),   # notification inbox
+    path("api/v1/", include("apps.matching.urls")),        # geo-matching engine
 
     # --- OpenAPI schema + docs ---
     path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
