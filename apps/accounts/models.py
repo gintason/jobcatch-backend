@@ -94,43 +94,9 @@ class ArtisanProfile(BaseModel):
 
     # Set by admin once submitted job-sample videos are approved (see ArtisanJobVideo).
     is_work_verified = models.BooleanField(default=False)
-    is_work_verified = models.BooleanField(default=False)  # set once job videos approved
 
     def __str__(self):
         return f"Artisan<{self.user.email}>"
-
-
-class JobVideoStatus(models.TextChoices):
-    PENDING = "pending", "Pending"
-    APPROVED = "approved", "Approved"
-    REJECTED = "rejected", "Rejected"
-
-
-class ArtisanJobVideo(BaseModel):
-    """
-    Video evidence of previous jobs, submitted by artisans as part of
-    verification. An admin reviews each; once approved, the artisan's
-    is_work_verified badge can be granted (verification slice).
-    """
-
-    artisan = models.ForeignKey(
-        ArtisanProfile, on_delete=models.CASCADE, related_name="job_videos"
-    )
-    video = models.FileField(upload_to="job_videos/", validators=[validate_video_upload])
-    title = models.CharField(max_length=200)
-    description = models.TextField(blank=True)
-    status = models.CharField(
-        max_length=20, choices=JobVideoStatus.choices,
-        default=JobVideoStatus.PENDING, db_index=True,
-    )
-    review_note = models.TextField(blank=True)
-    reviewed_by = models.ForeignKey(
-        "accounts.User", null=True, blank=True,
-        on_delete=models.SET_NULL, related_name="job_videos_reviewed",
-    )
-
-    def __str__(self):
-        return f"JobVideo<{self.title}> ({self.status})"
 
 
 class ArtisanPortfolioItem(BaseModel):
