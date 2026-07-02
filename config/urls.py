@@ -11,6 +11,8 @@ urlpatterns = [
     path("api/v1/", include("apps.accounts.api_urls")),   # profiles, portfolio, job-videos
     path("api/v1/", include("apps.catalog.urls")),         # categories, services
     path("api/v1/", include("apps.jobs.urls")),            # cvs (jobs/applications in 2C)
+    path("api/v1/", include("apps.bookings.urls")),        # bookings + lifecycle actions
+    path("api/v1/", include("apps.reviews.urls")),         # reviews
 
     # --- OpenAPI schema + docs ---
     path("api/schema/", SpectacularAPIView.as_view(), name="schema"),

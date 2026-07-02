@@ -5,8 +5,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     binutils libproj-dev gdal-bin libgdal-dev libgeos-dev \
     && rm -rf /var/lib/apt/lists/*
 
-ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
-WORKDIR /app
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
