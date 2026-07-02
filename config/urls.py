@@ -15,6 +15,7 @@ urlpatterns = [
     path("api/v1/", include("apps.reviews.urls")),         # reviews
     path("api/v1/", include("apps.payments.urls")),        # payments + webhook
     path("api/v1/", include("apps.subscriptions.urls")),   # subscription history
+    path("api/v1/", include("apps.verification.urls")),    # verification workflow
 
     # --- OpenAPI schema + docs ---
     path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
