@@ -13,6 +13,8 @@ urlpatterns = [
     path("api/v1/", include("apps.jobs.urls")),            # cvs (jobs/applications in 2C)
     path("api/v1/", include("apps.bookings.urls")),        # bookings + lifecycle actions
     path("api/v1/", include("apps.reviews.urls")),         # reviews
+    path("api/v1/", include("apps.payments.urls")),        # payments + webhook
+    path("api/v1/", include("apps.subscriptions.urls")),   # subscription history
 
     # --- OpenAPI schema + docs ---
     path("api/schema/", SpectacularAPIView.as_view(), name="schema"),

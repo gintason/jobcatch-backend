@@ -3,6 +3,7 @@ Base settings for JobCatch. Environment-specific files import from here.
 All secrets come from environment variables via django-environ.
 """
 from datetime import timedelta
+from decimal import Decimal
 from pathlib import Path
 
 import environ
@@ -192,6 +193,19 @@ CORS_ALLOW_CREDENTIALS = True  # needed for the httpOnly refresh cookie on web
 MAX_UPLOAD_SIZE_MB = 25
 MAX_VIDEO_SIZE_MB = 100   # artisan job videos
 ALLOWED_UPLOAD_EXTENSIONS = ["jpg", "jpeg", "png", "pdf", "mp4"]
+
+# --- Payments & subscriptions ---
+PAYSTACK_SECRET_KEY = env("PAYSTACK_SECRET_KEY", default="")
+FLUTTERWAVE_SECRET_KEY = env("FLUTTERWAVE_SECRET_KEY", default="")
+COMMISSION_RATE = Decimal("0.10")           # 10% platform fee on booking payments
+SUBSCRIPTION_PERIOD_DAYS = 30
+SUBSCRIPTION_PRICES = {                       # Naira
+    "premium": Decimal("2500.00"),
+    "pro": Decimal("5000.00"),
+}
+PAYMENT_CALLBACK_URL = env(
+    "PAYMENT_CALLBACK_URL", default="https://jobcatchonline.com/payments/callback"
+)
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 LANGUAGE_CODE = "en-us"
