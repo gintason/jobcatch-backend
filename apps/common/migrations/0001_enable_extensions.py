@@ -27,4 +27,6 @@ class Migration(migrations.Migration):
 
     operations = [
         CreateExtension("postgis"),
+        # pgvector ("vector") is deferred to Phase 3 (AI chatbot KB); the
+        # managed Postgres image used in dev does not ship it yet.
     ]

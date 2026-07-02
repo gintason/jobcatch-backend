@@ -2,7 +2,7 @@ FROM python:3.12-slim
 
 # GeoDjango needs GDAL/GEOS/PROJ system libraries.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    binutils libproj-dev gdal-bin libgdal-dev libgeos-dev git \
+    binutils libproj-dev gdal-bin libgdal-dev libgeos-dev \
     && rm -rf /var/lib/apt/lists/*
 
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1

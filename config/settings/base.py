@@ -190,6 +190,7 @@ CORS_ALLOW_CREDENTIALS = True  # needed for the httpOnly refresh cookie on web
 # ------------------------------------------------------------------ files
 # JPG/PNG/PDF/MP4 only — enforced by validators in apps.common.validators
 MAX_UPLOAD_SIZE_MB = 25
+MAX_VIDEO_SIZE_MB = 100   # artisan job videos
 ALLOWED_UPLOAD_EXTENSIONS = ["jpg", "jpeg", "png", "pdf", "mp4"]
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"

@@ -2,6 +2,7 @@ from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 
 from .models import (
+    ArtisanJobVideo,
     ArtisanPortfolioItem,
     ArtisanProfile,
     CustomerProfile,
@@ -32,6 +33,13 @@ class UserAdmin(BaseUserAdmin):
         (None, {"classes": ("wide",),
                 "fields": ("email", "full_name", "role", "password1", "password2")}),
     )
+
+
+@admin.register(ArtisanJobVideo)
+class ArtisanJobVideoAdmin(admin.ModelAdmin):
+    list_display = ("title", "artisan", "status", "reviewed_by", "created_at")
+    list_filter = ("status",)
+    search_fields = ("title", "artisan__user__email")
 
 
 admin.site.register(CustomerProfile)

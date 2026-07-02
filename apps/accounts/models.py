@@ -15,7 +15,11 @@ from django.db import models
 from django.utils import timezone
 
 from apps.common.models import BaseModel
-from apps.common.validators import validate_upload
+from apps.common.validators import (
+    validate_document_upload,
+    validate_image_upload,
+    validate_video_upload,
+)
 
 from .managers import UserManager
 
@@ -88,14 +92,82 @@ class ArtisanProfile(BaseModel):
     reputation_score = models.PositiveIntegerField(default=0)
     is_featured = models.BooleanField(default=False)  # driven by subscription tier
 
+    # Set by admin once submitted job-sample videos are approved (see ArtisanJobVideo).
+    is_work_verified = models.BooleanField(default=False)
+    is_work_verified = models.BooleanField(default=False)  # set once job videos approved
+
     def __str__(self):
         return f"Artisan<{self.user.email}>"
 
 
+class JobVideoStatus(models.TextChoices):
+    PENDING = "pending", "Pending"
+    APPROVED = "approved", "Approved"
+    REJECTED = "rejected", "Rejected"
+
+
+class ArtisanJobVideo(BaseModel):
+    """
+    Video evidence of previous jobs, submitted by artisans as part of
+    verification. An admin reviews each; once approved, the artisan's
+    is_work_verified badge can be granted (verification slice).
+    """
+
+    artisan = models.ForeignKey(
+        ArtisanProfile, on_delete=models.CASCADE, related_name="job_videos"
+    )
+    video = models.FileField(upload_to="job_videos/", validators=[validate_video_upload])
+    title = models.CharField(max_length=200)
+    description = models.TextField(blank=True)
+    status = models.CharField(
+        max_length=20, choices=JobVideoStatus.choices,
+        default=JobVideoStatus.PENDING, db_index=True,
+    )
+    review_note = models.TextField(blank=True)
+    reviewed_by = models.ForeignKey(
+        "accounts.User", null=True, blank=True,
+        on_delete=models.SET_NULL, related_name="job_videos_reviewed",
+    )
+
+    def __str__(self):
+        return f"JobVideo<{self.title}> ({self.status})"
+
+
 class ArtisanPortfolioItem(BaseModel):
     artisan = models.ForeignKey(ArtisanProfile, on_delete=models.CASCADE, related_name="portfolio")
-    image = models.FileField(upload_to="portfolio/", validators=[validate_upload])
+    image = models.FileField(upload_to="portfolio/", validators=[validate_image_upload])
     caption = models.CharField(max_length=255, blank=True)
+
+
+class JobVideoStatus(models.TextChoices):
+    PENDING = "pending", "Pending review"
+    APPROVED = "approved", "Approved"
+    REJECTED = "rejected", "Rejected"
+
+
+class ArtisanJobVideo(BaseModel):
+    """
+    MP4 evidence of previous jobs, submitted as part of an artisan's verification.
+    Admin approval of these flips ArtisanProfile.is_work_verified (badge).
+    """
+
+    artisan = models.ForeignKey(
+        ArtisanProfile, on_delete=models.CASCADE, related_name="job_videos"
+    )
+    video = models.FileField(upload_to="job_videos/", validators=[validate_video_upload])
+    title = models.CharField(max_length=200)
+    description = models.TextField(blank=True)
+    status = models.CharField(
+        max_length=20, choices=JobVideoStatus.choices,
+        default=JobVideoStatus.PENDING, db_index=True,
+    )
+    reviewed_by = models.ForeignKey(
+        User, null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
+    )
+    review_note = models.TextField(blank=True)
+
+    def __str__(self):
+        return f"JobVideo<{self.title}> · {self.artisan.user.email}"
 
 
 class EmployerProfile(BaseModel):
@@ -109,12 +181,28 @@ class EmployerProfile(BaseModel):
         return f"Employer<{self.company_name}>"
 
 
+class NYSCStatus(models.TextChoices):
+    COMPLETED = "completed", "Completed (has certificate)"
+    SERVING = "serving", "Currently serving"
+    EXEMPTED = "exempted", "Exempted"
+    NOT_APPLICABLE = "not_applicable", "Not applicable"
+
+
 class JobSeekerProfile(BaseModel):
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="job_seeker_profile")
     headline = models.CharField(max_length=200, blank=True)
     skills = models.JSONField(default=list, blank=True)
     active_cv = models.ForeignKey(
         "jobs.CV", null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
+    )
+
+    # Graduate job seekers upload their NYSC certificate in addition to a CV.
+    is_graduate = models.BooleanField(default=False)
+    nysc_status = models.CharField(
+        max_length=20, choices=NYSCStatus.choices, default=NYSCStatus.NOT_APPLICABLE
+    )
+    nysc_certificate = models.FileField(
+        upload_to="nysc_certs/", null=True, blank=True, validators=[validate_document_upload]
     )
 
     def __str__(self):
