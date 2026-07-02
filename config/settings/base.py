@@ -57,6 +57,7 @@ LOCAL_APPS = [
     "apps.notifications",
     "apps.verification",
     "apps.matching",
+    "apps.ai",
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
@@ -216,6 +217,15 @@ MATCHING_WEIGHTS = {          # must sum to 1.0; tune without code changes
     "featured": 0.20,         # subscription-driven visibility boost
     "verified": 0.10,
 }
+
+# --- AI chatbot (RAG + tool-calling) ---
+# Provider defaults to "mock" (offline, no key) until a real key is configured.
+LLM_PROVIDER = env("LLM_PROVIDER", default="mock")
+LLM_API_KEY = env("LLM_API_KEY", default="")
+OPENAI_CHAT_MODEL = env("OPENAI_CHAT_MODEL", default="gpt-4o-mini")
+OPENAI_EMBED_MODEL = env("OPENAI_EMBED_MODEL", default="text-embedding-3-small")
+AI_MAX_TOOL_ROUNDS = 3
+AI_KB_TOP_K = 3
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 LANGUAGE_CODE = "en-us"
