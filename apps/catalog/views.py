@@ -38,6 +38,11 @@ class ServiceViewSet(viewsets.ModelViewSet):
         # On write actions, restrict to the caller's own services.
         if self.action not in ("list", "retrieve"):
             return qs.filter(artisan=self.request.user.artisan_profile)
+        # ?mine=true -> the calling artisan's own services (incl. inactive).
+        user = self.request.user
+        if (self.request.query_params.get("mine") == "true"
+                and getattr(user, "role", None) == "artisan"):
+            return qs.filter(artisan=user.artisan_profile)
         # Public listing: optional ?category= and ?artisan= filters.
         category = self.request.query_params.get("category")
         artisan = self.request.query_params.get("artisan")
