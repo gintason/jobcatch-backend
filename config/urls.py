@@ -1,4 +1,6 @@
 """Root URL configuration."""
+from django.conf import settings
+from django.conf.urls.static import static
 from django.contrib import admin
 from django.urls import include, path
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
@@ -20,8 +22,12 @@ urlpatterns = [
     path("api/v1/", include("apps.matching.urls")),        # geo-matching engine
     path("api/v1/", include("apps.messaging.urls")),       # conversations + message history
     path("api/v1/", include("apps.ai.urls")),              # AI chatbot (RAG + tools)
+    path("api/v1/", include("apps.public.urls")),          # public home-page data (no auth)
 
     # --- OpenAPI schema + docs ---
     path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
     path("api/docs/", SpectacularSwaggerView.as_view(url_name="schema"), name="docs"),
 ]
+
+if settings.DEBUG:
+    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
