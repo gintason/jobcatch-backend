@@ -1,8 +1,8 @@
-"""Public (unauthenticated) serializers for the marketing home page."""
+"""Public (unauthenticated) serializers for the marketing + browse pages."""
 from rest_framework import serializers
 
-from apps.accounts.models import ArtisanProfile
-from apps.catalog.models import Category
+from apps.accounts.models import ArtisanPortfolioItem, ArtisanProfile
+from apps.catalog.models import Category, Service
 
 
 class PublicCategorySerializer(serializers.ModelSerializer):
@@ -14,6 +14,8 @@ class PublicCategorySerializer(serializers.ModelSerializer):
 
 
 class PublicArtisanSerializer(serializers.ModelSerializer):
+    """Card representation for lists (featured + browse)."""
+
     full_name = serializers.CharField(source="user.full_name", read_only=True)
     trade = serializers.SerializerMethodField()
     image = serializers.SerializerMethodField()
@@ -34,10 +36,48 @@ class PublicArtisanSerializer(serializers.ModelSerializer):
 
     def get_image(self, obj):
         item = obj.portfolio.first()
-        if item and item.image:
-            # Relative /media/... path so the frontend loads it through its proxy.
-            return item.image.url
-        return None
+        return item.image.url if item and item.image else None
 
     def get_is_verified(self, obj):
         return bool(obj.is_work_verified or obj.user.is_identity_verified)
+
+
+class PublicServiceSerializer(serializers.ModelSerializer):
+    category_name = serializers.CharField(source="category.name", read_only=True)
+
+    class Meta:
+        model = Service
+        fields = ("id", "title", "category_name", "description", "base_price")
+
+
+class PublicPortfolioSerializer(serializers.ModelSerializer):
+    image = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ArtisanPortfolioItem
+        fields = ("id", "image", "caption")
+
+    def get_image(self, obj):
+        return obj.image.url if obj.image else None
+
+
+class PublicArtisanDetailSerializer(serializers.ModelSerializer):
+    """Full public profile: bio, services, and portfolio gallery."""
+
+    full_name = serializers.CharField(source="user.full_name", read_only=True)
+    is_verified = serializers.SerializerMethodField()
+    services = serializers.SerializerMethodField()
+    portfolio = PublicPortfolioSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = ArtisanProfile
+        fields = ("id", "full_name", "bio", "avg_rating", "rating_count",
+                  "is_featured", "is_verified", "service_radius_km",
+                  "services", "portfolio")
+
+    def get_is_verified(self, obj):
+        return bool(obj.is_work_verified or obj.user.is_identity_verified)
+
+    def get_services(self, obj):
+        active = obj.services.filter(is_active=True).select_related("category")
+        return PublicServiceSerializer(active, many=True).data
