@@ -53,6 +53,11 @@ class JobViewSet(viewsets.ModelViewSet):
         # Write actions: restrict to the employer's own jobs.
         if self.action not in ("list", "retrieve"):
             return qs.filter(employer=self.request.user.employer_profile)
+        # ?mine=true -> the employer's own jobs (incl. closed).
+        user = self.request.user
+        if (self.request.query_params.get("mine") == "true"
+                and getattr(user, "role", None) == "employer"):
+            return qs.filter(employer=user.employer_profile)
         # Public browse: open jobs, with optional ?category= and ?q= (title search).
         category = self.request.query_params.get("category")
         q = self.request.query_params.get("q")
