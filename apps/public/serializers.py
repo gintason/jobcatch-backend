@@ -3,6 +3,7 @@ from rest_framework import serializers
 
 from apps.accounts.models import ArtisanPortfolioItem, ArtisanProfile
 from apps.catalog.models import Category, Service
+from apps.jobs.models import Job
 
 
 class PublicCategorySerializer(serializers.ModelSerializer):
@@ -81,3 +82,13 @@ class PublicArtisanDetailSerializer(serializers.ModelSerializer):
     def get_services(self, obj):
         active = obj.services.filter(is_active=True).select_related("category")
         return PublicServiceSerializer(active, many=True).data
+
+
+class PublicJobSerializer(serializers.ModelSerializer):
+    category_name = serializers.CharField(source="category.name", read_only=True)
+    employer_company = serializers.CharField(source="employer.company_name", read_only=True)
+
+    class Meta:
+        model = Job
+        fields = ("id", "title", "description", "category", "category_name",
+                  "employer_company", "salary_min", "salary_max", "created_at")

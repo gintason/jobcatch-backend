@@ -74,3 +74,38 @@ def test_artisan_detail_public(client):
     assert data["full_name"] == "Ada Detail"
     assert len(data["services"]) == 1
     assert data["services"][0]["category_name"] == "Cleaning"
+
+
+def test_featured_jobs_public_and_tier_order(client):
+    from django.utils import timezone
+    from apps.jobs.models import Job
+    from apps.subscriptions.models import Plan, Subscription
+
+    free_emp = User.objects.create_user("free@x.com", "Str0ng!Pass9", full_name="Free Co",
+                                         role="employer", is_email_verified=True)
+    prem_emp = User.objects.create_user("prem@x.com", "Str0ng!Pass9", full_name="Prem Co",
+                                         role="employer", is_email_verified=True)
+    Subscription.objects.create(user=prem_emp, plan=Plan.PREMIUM, is_active=True,
+                                started_at=timezone.now())
+    cat = Category.objects.create(name="Tech")
+    Job.objects.create(employer=free_emp.employer_profile, title="Free Job",
+                       description="d", category=cat, is_open=True)
+    Job.objects.create(employer=prem_emp.employer_profile, title="Premium Job",
+                       description="d", category=cat, is_open=True)
+
+    r = client.get("/api/v1/public/featured-jobs/")
+    assert r.status_code == 200
+    titles = [j["title"] for j in r.json()]
+    assert titles[0] == "Premium Job"   # premium ranked first
+
+
+def test_public_jobs_browse_search(client):
+    from apps.jobs.models import Job
+    emp = User.objects.create_user("e2@x.com", "Str0ng!Pass9", full_name="Co",
+                                   role="employer", is_email_verified=True)
+    cat = Category.objects.create(name="Design")
+    Job.objects.create(employer=emp.employer_profile, title="UX Designer",
+                       description="d", category=cat, is_open=True)
+    r = client.get("/api/v1/public/jobs/?q=designer")
+    assert r.status_code == 200
+    assert r.json()["count"] == 1
