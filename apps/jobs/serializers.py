@@ -12,6 +12,12 @@ class CVSerializer(serializers.ModelSerializer):
         fields = ("id", "title", "file", "created_at")
         read_only_fields = ("id", "created_at")
 
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        if instance.file:
+            data["file"] = instance.file.url  # relative /media/... for the proxy
+        return data
+
 
 # ---------------------------------------------------------------- Jobs
 class JobWriteSerializer(serializers.ModelSerializer):
@@ -85,9 +91,13 @@ class ApplicationCreateSerializer(serializers.ModelSerializer):
 class ApplicationSerializer(serializers.ModelSerializer):
     job_title = serializers.CharField(source="job.title", read_only=True)
     seeker_email = serializers.EmailField(source="seeker.user.email", read_only=True)
+    cv_file = serializers.SerializerMethodField()
 
     class Meta:
         model = Application
         fields = ("id", "job", "job_title", "seeker", "seeker_email",
-                  "cv", "cover_letter", "status", "created_at")
+                  "cv", "cv_file", "cover_letter", "status", "created_at")
         read_only_fields = fields
+
+    def get_cv_file(self, obj):
+        return obj.cv.file.url if obj.cv and obj.cv.file else None
