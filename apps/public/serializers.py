@@ -62,6 +62,14 @@ class PublicPortfolioSerializer(serializers.ModelSerializer):
         return obj.image.url if obj.image else None
 
 
+class PublicReviewSerializer(serializers.Serializer):
+    id = serializers.UUIDField(read_only=True)
+    author_name = serializers.CharField(source="author.full_name", read_only=True)
+    rating = serializers.IntegerField(read_only=True)
+    comment = serializers.CharField(read_only=True)
+    created_at = serializers.DateTimeField(read_only=True)
+
+
 class PublicArtisanDetailSerializer(serializers.ModelSerializer):
     """Full public profile: bio, services, and portfolio gallery."""
 
@@ -69,12 +77,13 @@ class PublicArtisanDetailSerializer(serializers.ModelSerializer):
     is_verified = serializers.SerializerMethodField()
     services = serializers.SerializerMethodField()
     portfolio = PublicPortfolioSerializer(many=True, read_only=True)
+    reviews = serializers.SerializerMethodField()
 
     class Meta:
         model = ArtisanProfile
         fields = ("id", "full_name", "bio", "avg_rating", "rating_count",
                   "is_featured", "is_verified", "service_radius_km",
-                  "services", "portfolio")
+                  "services", "portfolio", "reviews")
 
     def get_is_verified(self, obj):
         return bool(obj.is_work_verified or obj.user.is_identity_verified)
@@ -82,6 +91,10 @@ class PublicArtisanDetailSerializer(serializers.ModelSerializer):
     def get_services(self, obj):
         active = obj.services.filter(is_active=True).select_related("category")
         return PublicServiceSerializer(active, many=True).data
+
+    def get_reviews(self, obj):
+        qs = obj.user.reviews_received.filter(is_visible=True).select_related("author")[:20]
+        return PublicReviewSerializer(qs, many=True).data
 
 
 class PublicJobSerializer(serializers.ModelSerializer):
