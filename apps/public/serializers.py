@@ -35,8 +35,8 @@ class PublicArtisanSerializer(serializers.ModelSerializer):
     def get_image(self, obj):
         item = obj.portfolio.first()
         if item and item.image:
-            request = self.context.get("request")
-            return request.build_absolute_uri(item.image.url) if request else item.image.url
+            # Relative /media/... path so the frontend loads it through its proxy.
+            return item.image.url
         return None
 
     def get_is_verified(self, obj):

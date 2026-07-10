@@ -93,6 +93,14 @@ class ArtisanPortfolioItemSerializer(serializers.ModelSerializer):
         fields = ("id", "image", "caption", "created_at")
         read_only_fields = ("id", "created_at")
 
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        if instance.image:
+            # Relative /media/... path so the frontend loads it through its proxy
+            # (avoids http/https mixed-content behind the Codespaces TLS proxy).
+            data["image"] = instance.image.url
+        return data
+
 
 class ArtisanJobVideoSerializer(serializers.ModelSerializer):
     class Meta:
