@@ -6,6 +6,18 @@ from apps.catalog.models import Category, Service
 from apps.jobs.models import Job
 
 
+def _active_tier(user):
+    """Return 'premium' | 'pro' | None for a user's active paid subscription."""
+    from apps.subscriptions.models import Subscription
+
+    sub = (Subscription.objects
+           .filter(user=user, is_active=True)
+           .exclude(plan="free")
+           .order_by("-started_at")
+           .first())
+    return sub.plan if sub else None
+
+
 class PublicCategorySerializer(serializers.ModelSerializer):
     service_count = serializers.IntegerField(read_only=True)
 
@@ -22,10 +34,15 @@ class PublicArtisanSerializer(serializers.ModelSerializer):
     image = serializers.SerializerMethodField()
     is_verified = serializers.SerializerMethodField()
 
+    tier = serializers.SerializerMethodField()
+
     class Meta:
         model = ArtisanProfile
         fields = ("id", "full_name", "trade", "image", "avg_rating",
-                  "rating_count", "is_featured", "is_verified")
+                  "rating_count", "is_featured", "is_verified", "tier")
+
+    def get_tier(self, obj):
+        return _active_tier(obj.user)
 
     def get_trade(self, obj):
         svc = obj.services.filter(is_active=True).select_related("category").first()
@@ -79,11 +96,16 @@ class PublicArtisanDetailSerializer(serializers.ModelSerializer):
     portfolio = PublicPortfolioSerializer(many=True, read_only=True)
     reviews = serializers.SerializerMethodField()
 
+    tier = serializers.SerializerMethodField()
+
     class Meta:
         model = ArtisanProfile
         fields = ("id", "full_name", "bio", "avg_rating", "rating_count",
                   "is_featured", "is_verified", "service_radius_km",
-                  "services", "portfolio", "reviews")
+                  "services", "portfolio", "reviews", "tier")
+
+    def get_tier(self, obj):
+        return _active_tier(obj.user)
 
     def get_is_verified(self, obj):
         return bool(obj.is_work_verified or obj.user.is_identity_verified)
@@ -101,7 +123,13 @@ class PublicJobSerializer(serializers.ModelSerializer):
     category_name = serializers.CharField(source="category.name", read_only=True)
     employer_company = serializers.CharField(source="employer.company_name", read_only=True)
 
+    employer_tier = serializers.SerializerMethodField()
+
     class Meta:
         model = Job
         fields = ("id", "title", "description", "category", "category_name",
-                  "employer_company", "salary_min", "salary_max", "created_at")
+                  "employer_company", "salary_min", "salary_max",
+                  "employer_tier", "created_at")
+
+    def get_employer_tier(self, obj):
+        return _active_tier(obj.employer.user)

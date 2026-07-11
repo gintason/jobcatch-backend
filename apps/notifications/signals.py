@@ -68,6 +68,41 @@ def on_application(sender, instance, created, **kwargs):
             body=f"Your application to '{instance.job.title}' was {instance.status}.",
             data={"application_id": str(instance.id), "status": instance.status},
         )
+        # On hire, open a direct chat between employer and the new hire.
+        if instance.status == "hired":
+            _ensure_hire_conversation(instance)
+
+
+def _ensure_hire_conversation(application):
+    """Create (once) a conversation linking the employer and the hired seeker."""
+    from apps.messaging.models import Conversation
+
+    employer_user = application.job.employer.user
+    seeker_user = application.seeker.user
+
+    exists = (Conversation.objects
+              .filter(job=application.job, participants=employer_user)
+              .filter(participants=seeker_user)
+              .exists())
+    if exists:
+        return
+
+    conversation = Conversation.objects.create(job=application.job)
+    conversation.participants.add(employer_user, seeker_user)
+    notify(
+        seeker_user,
+        kind="message_alert",
+        title="Chat opened with your employer",
+        body=f"You were hired for '{application.job.title}'. You can now message them directly.",
+        data={"conversation_id": str(conversation.id), "job_id": str(application.job.id)},
+    )
+    notify(
+        employer_user,
+        kind="message_alert",
+        title="Chat opened with your new hire",
+        body=f"You hired {seeker_user.full_name} for '{application.job.title}'.",
+        data={"conversation_id": str(conversation.id), "job_id": str(application.job.id)},
+    )
 
 
 # --- payments: notify payer on success ---
