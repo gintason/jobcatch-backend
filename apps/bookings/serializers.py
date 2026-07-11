@@ -50,20 +50,29 @@ class BookingSerializer(serializers.ModelSerializer):
 
     customer_email = serializers.EmailField(source="customer.user.email", read_only=True)
     artisan_email = serializers.EmailField(source="artisan.user.email", read_only=True)
+    customer_name = serializers.CharField(source="customer.user.full_name", read_only=True)
+    artisan_name = serializers.CharField(source="artisan.user.full_name", read_only=True)
+    customer_user_id = serializers.UUIDField(source="customer.user.id", read_only=True)
+    artisan_user_id = serializers.UUIDField(source="artisan.user.id", read_only=True)
     service_title = serializers.CharField(source="service.title", read_only=True)
     location = serializers.SerializerMethodField()
     history = BookingStatusHistorySerializer(many=True, read_only=True)
+    has_review = serializers.SerializerMethodField()
 
     class Meta:
         model = Booking
         fields = (
             "id", "status", "service", "service_title",
-            "customer", "customer_email", "artisan", "artisan_email",
+            "customer", "customer_email", "customer_name", "customer_user_id",
+            "artisan", "artisan_email", "artisan_name", "artisan_user_id",
             "scheduled_for", "location", "address", "agreed_price",
-            "notes", "history", "created_at",
+            "notes", "history", "has_review", "created_at",
         )
         read_only_fields = fields
 
     def get_location(self, obj):
         p = obj.location
         return {"latitude": p.y, "longitude": p.x} if p else None
+
+    def get_has_review(self, obj):
+        return hasattr(obj, "review")
