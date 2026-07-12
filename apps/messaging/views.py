@@ -39,14 +39,33 @@ class ConversationViewSet(viewsets.ModelViewSet):
                 .distinct())
 
     def create(self, request, *args, **kwargs):
+        """
+        Get-or-create: two people talking about the same booking/job share ONE
+        thread. Creating a fresh Conversation per request would put each party
+        in a separate room where neither sees the other's messages.
+        """
         ser = ConversationCreateSerializer(data=request.data, context={"request": request})
         ser.is_valid(raise_exception=True)
-        conv = Conversation.objects.create(
-            booking=ser.validated_data.get("booking"),
-            job=ser.validated_data.get("job"),
+        other = ser.validated_data["participant"]
+        booking = ser.validated_data.get("booking")
+        job = ser.validated_data.get("job")
+
+        existing = (
+            Conversation.objects
+            .filter(booking=booking, job=job)
+            .filter(participants=request.user)
+            .filter(participants=other)
+            .distinct()
+            .first()
         )
-        conv.participants.add(request.user, ser.validated_data["participant"])
-        return Response(ConversationSerializer(conv).data, status=status.HTTP_201_CREATED)
+        conv = existing or Conversation.objects.create(booking=booking, job=job)
+        if existing is None:
+            conv.participants.add(request.user, other)
+
+        return Response(
+            ConversationSerializer(conv, context={"request": request}).data,
+            status=status.HTTP_200_OK if existing else status.HTTP_201_CREATED,
+        )
 
     @action(detail=True, methods=["get", "post"])
     def messages(self, request, pk=None):
