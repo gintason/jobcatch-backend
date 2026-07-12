@@ -6,6 +6,8 @@ Payments API.
   POST /payments/webhook/paystack/  -> gateway callback (signature-verified)
   GET  /payments/                   -> transaction history (own; admin sees all)
 """
+import logging
+
 import json
 from uuid import uuid4
 
@@ -19,7 +21,7 @@ from rest_framework.views import APIView
 from apps.accounts.models import UserRole
 from apps.subscriptions.models import Subscription
 
-from .gateways import get_gateway
+from .gateways import GatewayError, get_gateway
 from .models import Payment, PaymentPurpose, PaymentStatus
 from .serializers import PaymentInitializeSerializer, PaymentSerializer
 from .services import compute_commission
@@ -27,6 +29,9 @@ from .tasks import process_successful_payment
 
 GATEWAY = "paystack"
 
+
+
+logger = logging.getLogger(__name__)
 
 class InitializePaymentView(APIView):
     permission_classes = [IsAuthenticated]
@@ -58,10 +63,20 @@ class InitializePaymentView(APIView):
                 is_active=False, started_at=timezone.now(), payment=payment,
             )
 
-        result = get_gateway(GATEWAY).initialize(
-            reference=reference, amount_kobo=int(amount * 100),
-            email=request.user.email, callback_url=settings.PAYMENT_CALLBACK_URL,
-        )
+        try:
+            result = get_gateway(GATEWAY).initialize(
+                reference=reference, amount_kobo=int(amount * 100),
+                email=request.user.email, callback_url=settings.PAYMENT_CALLBACK_URL,
+            )
+        except GatewayError as exc:
+            logger.error("Payment initialize failed [%s]: %s", reference, exc)
+            payment.status = PaymentStatus.FAILED
+            payment.save(update_fields=["status"])
+            return Response(
+                {"detail": "Payment provider is unavailable. Please try again shortly."},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
         return Response(
             {"authorization_url": result["authorization_url"], "reference": reference},
             status=status.HTTP_201_CREATED,

@@ -8,26 +8,47 @@ Uses the standard library for HTTP so no extra dependency is required.
 import hashlib
 import hmac
 import json
+import urllib.error
 import urllib.request
 
 from django.conf import settings
 from rest_framework.exceptions import ValidationError
 
 
-def _post_json(url, payload, headers):
-    data = json.dumps(payload).encode()
+# Paystack sits behind a WAF that rejects the default "Python-urllib/x.y"
+# agent with 403, so every request identifies itself properly.
+_BASE_HEADERS = {
+    "Content-Type": "application/json",
+    "Accept": "application/json",
+    "User-Agent": "JobCatch/1.0 (+https://jobcatchonline.com)",
+}
+
+
+class GatewayError(Exception):
+    """Raised when the payment provider rejects or fails a request."""
+
+
+def _request_json(url, headers, payload=None, method="GET"):
+    data = json.dumps(payload).encode() if payload is not None else None
     req = urllib.request.Request(
-        url, data=data, method="POST",
-        headers={**headers, "Content-Type": "application/json"},
+        url, data=data, method=method, headers={**_BASE_HEADERS, **headers}
     )
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        return json.loads(resp.read().decode())
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return json.loads(resp.read().decode())
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode(errors="replace")[:500]
+        raise GatewayError(f"Payment provider returned {exc.code}: {body}") from exc
+    except urllib.error.URLError as exc:
+        raise GatewayError(f"Could not reach payment provider: {exc.reason}") from exc
+
+
+def _post_json(url, payload, headers):
+    return _request_json(url, headers, payload=payload, method="POST")
 
 
 def _get_json(url, headers):
-    req = urllib.request.Request(url, method="GET", headers=headers)
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        return json.loads(resp.read().decode())
+    return _request_json(url, headers, method="GET")
 
 
 class PaymentGateway:
