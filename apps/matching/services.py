@@ -11,15 +11,23 @@ intentionally isolated so it can later be swapped for a learned ranker.
 from django.conf import settings
 from django.contrib.gis.db.models.functions import Distance
 from django.contrib.gis.measure import D
+from django.db.models import OuterRef, Subquery
 
 from apps.accounts.models import ArtisanProfile
+from apps.subscriptions.models import Subscription
+
+# Paid tiers get a visibility boost in matching, mirroring the public listings.
+TIER_BOOST = {"premium": 1.0, "pro": 0.6}
 
 
 def _score(artisan, distance_km, radius_km):
     w = settings.MATCHING_WEIGHTS
     proximity = max(0.0, 1.0 - (distance_km / radius_km)) if radius_km else 0.0
     rating = float(artisan.avg_rating) / 5.0
-    featured = 1.0 if artisan.is_featured else 0.0
+    # "featured" combines an explicit editorial flag with the paid tier, so a
+    # Premium subscriber ranks above Pro, which ranks above free.
+    tier = TIER_BOOST.get(getattr(artisan, "active_plan", None), 0.0)
+    featured = max(1.0 if artisan.is_featured else 0.0, tier)
     verified = 1.0 if (artisan.is_work_verified or artisan.user.is_identity_verified) else 0.0
     return round(
         w["proximity"] * proximity
@@ -39,10 +47,18 @@ def match_artisans(*, point, radius_km, category=None, q=None, limit=20):
         qs = qs.filter(services__title__icontains=q)
 
     # Stage 1: within the customer's search radius (PostGIS, index-assisted).
+    active_plan = (
+        Subscription.objects
+        .filter(user=OuterRef("user"), is_active=True)
+        .exclude(plan="free")
+        .order_by("-started_at")
+        .values("plan")[:1]
+    )
     qs = (
         qs.filter(base_location__dwithin=(point, D(km=radius_km)))
         .distinct()
         .annotate(distance=Distance("base_location", point))
+        .annotate(active_plan=Subquery(active_plan))
         .select_related("user")
     )
 

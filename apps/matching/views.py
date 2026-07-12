@@ -15,10 +15,14 @@ def _serialize(artisan, distance_km, score):
          "base_price": str(s.base_price)}
         for s in artisan.services.filter(is_active=True)
     ]
+    point = artisan.base_location
     return {
         "artisan_id": str(artisan.id),
         "user_id": str(artisan.user_id),
         "full_name": artisan.user.full_name,
+        "latitude": point.y if point else None,
+        "longitude": point.x if point else None,
+        "tier": getattr(artisan, "active_plan", None),
         "avg_rating": str(artisan.avg_rating),
         "rating_count": artisan.rating_count,
         "is_featured": artisan.is_featured,
