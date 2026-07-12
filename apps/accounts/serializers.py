@@ -19,6 +19,12 @@ class RegisterSerializer(serializers.ModelSerializer):
     role = serializers.ChoiceField(
         choices=[c for c in UserRole.choices if c[0] != UserRole.ADMIN]
     )
+    # `phone` is unique but optional: many users register without one. Empty
+    # strings would collide on the unique index (only NULLs are exempt), so a
+    # blank value is normalised to None.
+    phone = serializers.CharField(
+        required=False, allow_blank=True, allow_null=True, max_length=20
+    )
 
     class Meta:
         model = User
@@ -29,8 +35,17 @@ class RegisterSerializer(serializers.ModelSerializer):
         validate_password(value)
         return value
 
+    def validate_phone(self, value):
+        value = (value or "").strip()
+        if not value:
+            return None
+        if User.objects.filter(phone=value).exists():
+            raise serializers.ValidationError("This phone number is already registered.")
+        return value
+
     def create(self, validated_data):
         password = validated_data.pop("password")
+        validated_data["phone"] = validated_data.get("phone") or None
         user = User(**validated_data)
         user.set_password(password)
         user.is_email_verified = False
