@@ -25,7 +25,7 @@ from .serializers import (
     ResendOTPSerializer,
     VerifyOTPSerializer,
 )
-from .tasks import send_otp_email
+from .tasks import deliver_otp
 from .throttles import LoginThrottle, OTPThrottle
 from .tokens import tokens_for_user
 
@@ -35,7 +35,7 @@ REFRESH_COOKIE = "jc_refresh"
 # ------------------------------------------------------------------ helpers
 def _issue_otp(user, purpose):
     otp, code = OTP.issue(user, purpose, settings.OTP_LENGTH, settings.OTP_TTL_MINUTES)
-    send_otp_email.delay(user.email, code, purpose)
+    deliver_otp(user.email, code, purpose)
     return otp
 
 
