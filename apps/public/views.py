@@ -46,9 +46,14 @@ class PublicCategoryList(ListAPIView):
     pagination_class = None
 
     def get_queryset(self):
-        return Category.objects.annotate(
+        qs = Category.objects.annotate(
             service_count=Count("services", filter=Q(services__is_active=True))
-        ).order_by("name")
+        )
+        # Home page shows home services; the jobs page shows job categories.
+        kind = self.request.query_params.get("kind", "home_service")
+        if kind != "all":
+            qs = qs.filter(kind=kind)
+        return qs.order_by("name")
 
 
 class FeaturedArtisanList(ListAPIView):

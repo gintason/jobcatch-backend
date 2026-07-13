@@ -97,12 +97,17 @@ class PublicArtisanDetailSerializer(serializers.ModelSerializer):
     reviews = serializers.SerializerMethodField()
 
     tier = serializers.SerializerMethodField()
+    phone = serializers.SerializerMethodField()
 
     class Meta:
         model = ArtisanProfile
         fields = ("id", "full_name", "bio", "avg_rating", "rating_count",
                   "is_featured", "is_verified", "service_radius_km",
-                  "services", "portfolio", "reviews", "tier")
+                  "services", "portfolio", "reviews", "tier", "phone")
+
+    def get_phone(self, obj):
+        """Only published when the artisan has opted in."""
+        return obj.user.phone if obj.show_phone else None
 
     def get_tier(self, obj):
         return _active_tier(obj.user)

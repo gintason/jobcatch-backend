@@ -83,6 +83,8 @@ class ArtisanProfile(BaseModel):
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="artisan_profile")
     bio = models.TextField(blank=True)
     base_location = gis.PointField(geography=True, null=True, blank=True)
+    # Artisans opt in to publishing their phone number for direct calls.
+    show_phone = models.BooleanField(default=True)
     service_radius_km = models.PositiveIntegerField(default=10)
     is_available = models.BooleanField(default=True)
 

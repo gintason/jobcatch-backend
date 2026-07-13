@@ -24,6 +24,7 @@ pgvector==0.2.5                    # vector column for AI chatbot KB (Phase 3)
 django-storages[boto3]==1.14.3     # S3-compatible object storage
 
 # ---- Server ----
+whitenoise==6.6.0                  # static files in production (no nginx needed)
 gunicorn==22.0.0
 uvicorn[standard]==0.29.0          # ASGI worker for Channels
 

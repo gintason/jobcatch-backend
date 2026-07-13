@@ -23,3 +23,19 @@ if not CORS_ALLOWED_ORIGINS:
     ]
 
 INTERNAL_IPS = ["127.0.0.1"]
+
+# macOS: GeoDjango can't auto-discover GDAL/GEOS when they live inside
+# Postgres.app rather than a standard system path, so point at them explicitly.
+# Only set when provided — on Linux (Docker, Render) the libraries are found
+# automatically and these stay unset.
+_gdal = env("GDAL_LIBRARY_PATH", default="")
+_geos = env("GEOS_LIBRARY_PATH", default="")
+if _gdal:
+    GDAL_LIBRARY_PATH = _gdal
+if _geos:
+    GEOS_LIBRARY_PATH = _geos
+
+# Serve static files (Django admin CSS) under uvicorn, which — unlike runserver —
+# has no built-in static handler.
+MIDDLEWARE.insert(1, "whitenoise.middleware.WhiteNoiseMiddleware")
+WHITENOISE_USE_FINDERS = True

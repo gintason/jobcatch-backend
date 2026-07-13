@@ -5,15 +5,36 @@ from django.utils.text import slugify
 from apps.common.models import BaseModel
 
 
+class CategoryKind(models.TextChoices):
+    """
+    The two marketplaces have entirely separate taxonomies: a customer booking a
+    plumber and an employer hiring a petroleum engineer share no vocabulary.
+    One model, two disjoint sets, filtered by `kind`.
+    """
+
+    HOME_SERVICE = "home_service", "Home service"
+    JOB = "job", "Job listing"
+
+
 class Category(BaseModel):
-    name = models.CharField(max_length=120, unique=True)
-    slug = models.SlugField(unique=True, blank=True)
+    name = models.CharField(max_length=120)
+    slug = models.SlugField(blank=True)
+    kind = models.CharField(
+        max_length=20, choices=CategoryKind.choices,
+        default=CategoryKind.HOME_SERVICE, db_index=True,
+    )
     parent = models.ForeignKey(
         "self", null=True, blank=True, on_delete=models.SET_NULL, related_name="children"
     )
 
     class Meta(BaseModel.Meta):
         verbose_name_plural = "categories"
+        # Names are unique *within* a taxonomy, not across it: "Photographer"
+        # can legitimately exist as both a home service and a job category.
+        constraints = [
+            models.UniqueConstraint(fields=["kind", "name"], name="uniq_category_kind_name"),
+            models.UniqueConstraint(fields=["kind", "slug"], name="uniq_category_kind_slug"),
+        ]
 
     def save(self, *args, **kwargs):
         if not self.slug:

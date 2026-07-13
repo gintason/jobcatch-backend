@@ -11,23 +11,47 @@ SECURE_HSTS_INCLUDE_SUBDOMAINS = True
 SECURE_HSTS_PRELOAD = True
 SECURE_CONTENT_TYPE_NOSNIFF = True
 
-# --- Cookies (the refresh-token cookie must be secure) ---
+# --- Cookies ---
 SESSION_COOKIE_SECURE = True
 CSRF_COOKIE_SECURE = True
 CSRF_COOKIE_HTTPONLY = True
+CSRF_TRUSTED_ORIGINS = env.list("CSRF_TRUSTED_ORIGINS", default=[])  # noqa
 
-# --- Email over SMTP in production ---
+# --- Email over real SMTP ---
 EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
 
-# --- Static via WhiteNoise (add to MIDDLEWARE right after SecurityMiddleware) ---
-MIDDLEWARE.insert(1, "whitenoise.middleware.WhiteNoiseMiddleware")
-STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
+# --- Static files via WhiteNoise (no nginx needed) ---
+MIDDLEWARE.insert(1, "whitenoise.middleware.WhiteNoiseMiddleware")  # noqa
+STORAGES = {
+    "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+    "staticfiles": {"BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage"},
+}
 
-# --- Media/verification docs → private S3 bucket, served via signed URLs ---
-DEFAULT_FILE_STORAGE = "storages.backends.s3boto3.S3Boto3Storage"
-AWS_ACCESS_KEY_ID = env("AWS_ACCESS_KEY_ID", default="")          # noqa
-AWS_SECRET_ACCESS_KEY = env("AWS_SECRET_ACCESS_KEY", default="")  # noqa
+# --- Media (uploads: portfolio photos, CVs, verification docs) ---
+# Prefer S3-compatible object storage. Render's filesystem is EPHEMERAL: without
+# a bucket (or a mounted persistent disk), uploaded files vanish on every deploy.
 AWS_STORAGE_BUCKET_NAME = env("AWS_STORAGE_BUCKET_NAME", default="")  # noqa
-AWS_S3_ENDPOINT_URL = env("AWS_S3_ENDPOINT_URL", default="")      # noqa
-AWS_DEFAULT_ACL = None
-AWS_QUERYSTRING_AUTH = True   # signed URLs for private objects
+if AWS_STORAGE_BUCKET_NAME:
+    AWS_ACCESS_KEY_ID = env("AWS_ACCESS_KEY_ID")              # noqa
+    AWS_SECRET_ACCESS_KEY = env("AWS_SECRET_ACCESS_KEY")      # noqa
+    AWS_S3_ENDPOINT_URL = env("AWS_S3_ENDPOINT_URL", default="")  # noqa
+    AWS_S3_REGION_NAME = env("AWS_S3_REGION_NAME", default="")    # noqa
+    AWS_DEFAULT_ACL = None
+    AWS_QUERYSTRING_AUTH = True   # signed URLs — verification docs stay private
+    AWS_S3_FILE_OVERWRITE = False
+    STORAGES["default"] = {"BACKEND": "storages.backends.s3boto3.S3Boto3Storage"}
+
+# --- Logging: surface errors in Render's log stream ---
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {"simple": {"format": "{levelname} {name} {message}", "style": "{"}},
+    "handlers": {
+        "console": {"class": "logging.StreamHandler", "formatter": "simple"},
+    },
+    "root": {"handlers": ["console"], "level": "INFO"},
+    "loggers": {
+        "django.request": {"handlers": ["console"], "level": "ERROR", "propagate": False},
+        "apps": {"handlers": ["console"], "level": "INFO", "propagate": False},
+    },
+}

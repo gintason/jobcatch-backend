@@ -48,6 +48,15 @@ class JobWriteSerializer(serializers.ModelSerializer):
 
 
 class JobSerializer(serializers.ModelSerializer):
+    def validate_category(self, value):
+        from apps.catalog.models import CategoryKind
+
+        if value.kind != CategoryKind.JOB:
+            raise serializers.ValidationError(
+                "Jobs must use a job-listing category."
+            )
+        return value
+
     employer_company = serializers.CharField(source="employer.company_name", read_only=True)
     location = serializers.SerializerMethodField()
     application_count = serializers.IntegerField(source="applications.count", read_only=True)

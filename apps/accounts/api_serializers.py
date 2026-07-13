@@ -9,6 +9,7 @@ from .models import (
     CustomerProfile,
     EmployerProfile,
     JobSeekerProfile,
+    User,
 )
 
 
@@ -46,11 +47,17 @@ class CustomerProfileSerializer(_LocationMixin):
 class ArtisanProfileSerializer(_LocationMixin):
     LOCATION_FIELD = "base_location"
     location = serializers.SerializerMethodField()
+    # Phone lives on User, but artisans manage it from their profile screen so
+    # customers can call them directly.
+    phone = serializers.CharField(
+        source="user.phone", required=False, allow_blank=True,
+        allow_null=True, max_length=20,
+    )
 
     class Meta:
         model = ArtisanProfile
         fields = (
-            "bio", "service_radius_km", "is_available",
+            "bio", "phone", "show_phone", "service_radius_km", "is_available",
             "latitude", "longitude", "location",
             # read-only, system-managed:
             "avg_rating", "rating_count", "reputation_score",
@@ -60,6 +67,19 @@ class ArtisanProfileSerializer(_LocationMixin):
             "avg_rating", "rating_count", "reputation_score",
             "is_featured", "is_work_verified",
         )
+
+    def update(self, instance, validated_data):
+        user_data = validated_data.pop("user", {})
+        phone = user_data.get("phone")
+        if "phone" in user_data:
+            phone = (phone or "").strip() or None
+            if phone and User.objects.filter(phone=phone).exclude(pk=instance.user_id).exists():
+                raise serializers.ValidationError(
+                    {"phone": "This phone number is already registered."}
+                )
+            instance.user.phone = phone
+            instance.user.save(update_fields=["phone", "updated_at"])
+        return super().update(instance, validated_data)
 
 
 class EmployerProfileSerializer(serializers.ModelSerializer):

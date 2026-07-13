@@ -9,15 +9,24 @@ from .serializers import CategorySerializer, ServiceSerializer
 
 
 class CategoryViewSet(viewsets.ModelViewSet):
-    """Anyone authenticated can read; only admins can create/edit/delete."""
+    """
+    Anyone authenticated can read; only admins can create/edit/delete.
+    Filter by taxonomy with ?kind=home_service or ?kind=job.
+    """
 
-    queryset = Category.objects.all()
     serializer_class = CategorySerializer
 
     def get_permissions(self):
         if self.action in ("list", "retrieve"):
             return [IsAuthenticated()]
         return [IsAdmin()]
+
+    def get_queryset(self):
+        qs = Category.objects.all()
+        kind = self.request.query_params.get("kind")
+        if kind:
+            qs = qs.filter(kind=kind)
+        return qs.order_by("name")
 
 
 class ServiceViewSet(viewsets.ModelViewSet):
