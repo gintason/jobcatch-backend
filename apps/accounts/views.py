@@ -146,7 +146,11 @@ class LoginView(APIView):
             return Response({"detail": "Account is disabled."},
                             status=status.HTTP_403_FORBIDDEN)
         if not user.is_email_verified:
-            return Response({"detail": "Email not verified.", "code": "email_unverified"},
+            # Send a fresh code as we bounce them to the verify screen — otherwise
+            # they land there waiting for an email that was never sent.
+            _issue_otp(user, OTPPurpose.EMAIL_VERIFY)
+            return Response({"detail": "Email not verified. We've sent you a new code.",
+                             "code": "email_unverified"},
                             status=status.HTTP_403_FORBIDDEN)
         user.last_login = timezone.now()
         user.save(update_fields=["last_login"])
