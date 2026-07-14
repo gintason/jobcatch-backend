@@ -24,6 +24,14 @@ CSRF_TRUSTED_ORIGINS = env.list("CSRF_TRUSTED_ORIGINS", default=[])  # noqa
 # --- Email over real SMTP ---
 EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
 
+# --- Celery ---
+# We deploy no Celery worker, but Redis IS reachable — so .delay() would succeed,
+# push the task onto a queue nobody consumes, and the OTP would silently vanish.
+# Running tasks eagerly (inline, in the request) keeps registration working.
+# Set CELERY_TASK_ALWAYS_EAGER=False once a real worker service exists.
+CELERY_TASK_ALWAYS_EAGER = env.bool("CELERY_TASK_ALWAYS_EAGER", default=True)  # noqa
+CELERY_TASK_EAGER_PROPAGATES = True
+
 # --- Static files via WhiteNoise (no nginx needed) ---
 MIDDLEWARE.insert(1, "whitenoise.middleware.WhiteNoiseMiddleware")  # noqa
 STORAGES = {
