@@ -15,6 +15,12 @@ SECURE_HSTS_INCLUDE_SUBDOMAINS = True
 SECURE_HSTS_PRELOAD = True
 SECURE_CONTENT_TYPE_NOSNIFF = True
 
+# Behind Render's load balancer every request arrives from the proxy's IP, so
+# DRF would throttle all anonymous users as if they were one client — 60/min
+# shared across the whole internet. Telling DRF how many proxies sit in front
+# makes it read the real client IP from X-Forwarded-For instead.
+REST_FRAMEWORK = {**REST_FRAMEWORK, "NUM_PROXIES": 1}  # noqa
+
 # --- Cookies ---
 SESSION_COOKIE_SECURE = True
 CSRF_COOKIE_SECURE = True

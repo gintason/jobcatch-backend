@@ -5,7 +5,12 @@ from django.urls import include, path, re_path
 from django.views.static import serve
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 
+from apps.common.health import healthz
+
 urlpatterns = [
+    # Unthrottled liveness probe — see apps/common/health.py.
+    path("healthz/", healthz, name="healthz"),
+
     path("admin/", admin.site.urls),
 
     # --- API v1 ---

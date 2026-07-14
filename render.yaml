@@ -22,7 +22,7 @@ services:
     plan: starter
     buildCommand: "./build.sh"
     startCommand: "uvicorn config.asgi:application --host 0.0.0.0 --port $PORT"
-    healthCheckPath: /api/v1/public/categories/
+    healthCheckPath: /healthz/
     # Uploads (photos, CVs, videos, verification docs) must outlive a deploy.
     # Without this disk, Render's filesystem is wiped on every build.
     disk:
