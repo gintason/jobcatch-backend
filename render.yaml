@@ -1,0 +1,74 @@
+# Render blueprint — provisions the whole backend stack in one go.
+# In Render: New → Blueprint → point at the jobcatch-backend repo.
+databases:
+  - name: jobcatch-db
+    databaseName: jobcatch
+    user: jobcatch
+    plan: free            # 90-day expiry on free; upgrade to starter for production
+    postgresMajorVersion: "16"
+
+services:
+  # --- Redis: Channels layer (chat) + Celery broker ---
+  - type: keyvalue
+    name: jobcatch-redis
+    plan: free
+    ipAllowList: []       # internal access only
+    maxmemoryPolicy: noeviction
+
+  # --- Django API (ASGI: WebSockets need uvicorn, not gunicorn) ---
+  - type: web
+    name: jobcatch-api
+    runtime: python
+    plan: starter
+    buildCommand: "./build.sh"
+    startCommand: "uvicorn config.asgi:application --host 0.0.0.0 --port $PORT"
+    healthCheckPath: /api/v1/public/categories/
+    envVars:
+      - key: DJANGO_SETTINGS_MODULE
+        value: config.settings.production
+      - key: PYTHON_VERSION
+        value: "3.12.5"
+      - key: SECRET_KEY
+        generateValue: true          # Render generates a strong value
+      - key: JWT_SIGNING_KEY
+        generateValue: true
+      - key: DEBUG
+        value: "False"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: jobcatch-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: jobcatch-redis
+          property: connectionString
+      # --- set these in the Render dashboard (secrets / domain-specific) ---
+      - key: ALLOWED_HOSTS
+        sync: false
+      - key: CORS_ALLOWED_ORIGINS
+        sync: false
+      - key: CSRF_TRUSTED_ORIGINS
+        sync: false
+      - key: EMAIL_HOST
+        sync: false
+      - key: EMAIL_PORT
+        sync: false
+      - key: EMAIL_HOST_USER
+        sync: false
+      - key: EMAIL_HOST_PASSWORD
+        sync: false
+      - key: EMAIL_USE_SSL
+        sync: false
+      - key: EMAIL_USE_TLS
+        sync: false
+      - key: DEFAULT_FROM_EMAIL
+        sync: false
+      - key: PAYSTACK_SECRET_KEY
+        sync: false
+      - key: PAYMENT_CALLBACK_URL
+        sync: false
+      - key: LLM_PROVIDER
+        sync: false
+      - key: LLM_API_KEY
+        sync: false

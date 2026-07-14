@@ -3,6 +3,10 @@ from .base import *  # noqa
 
 DEBUG = False
 
+# Render's DATABASE_URL uses the postgres:// scheme; GeoDjango needs the spatial
+# backend, so force it rather than relying on the URL prefix being right.
+DATABASES["default"]["ENGINE"] = "django.contrib.gis.db.backends.postgis"  # noqa
+
 # --- Transport security ---
 SECURE_SSL_REDIRECT = True
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")  # Render terminates TLS
