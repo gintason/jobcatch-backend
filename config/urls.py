@@ -29,5 +29,11 @@ urlpatterns = [
     path("api/docs/", SpectacularSwaggerView.as_view(url_name="schema"), name="docs"),
 ]
 
-if settings.DEBUG:
+# Serve user uploads (photos, CVs, videos) from the app itself.
+#
+# Django refuses to serve MEDIA_URL when DEBUG=False — normally that's the job of
+# nginx or object storage. With uploads on a Render persistent disk and no S3
+# bucket configured, Django has to do it, so SERVE_MEDIA opts back in. It's set
+# automatically in production.py only when no S3 bucket is present.
+if settings.DEBUG or getattr(settings, "SERVE_MEDIA", False):
     urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

@@ -52,6 +52,13 @@ if AWS_STORAGE_BUCKET_NAME:
     AWS_QUERYSTRING_AUTH = True   # signed URLs — verification docs stay private
     AWS_S3_FILE_OVERWRITE = False
     STORAGES["default"] = {"BACKEND": "storages.backends.s3boto3.S3Boto3Storage"}
+    SERVE_MEDIA = False          # S3 serves the files directly
+else:
+    # No object storage: uploads live on a Render persistent disk, and Django
+    # serves them itself. RENDER_DISK_PATH is the disk's mount point — without a
+    # disk mounted there, every deploy wipes the files.
+    MEDIA_ROOT = env("RENDER_DISK_PATH", default=str(BASE_DIR / "media"))  # noqa
+    SERVE_MEDIA = True
 
 # --- Logging: surface errors in Render's log stream ---
 LOGGING = {
