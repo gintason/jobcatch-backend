@@ -1,8 +1,8 @@
 """Root URL configuration."""
 from django.conf import settings
-from django.conf.urls.static import static
 from django.contrib import admin
-from django.urls import include, path
+from django.urls import include, path, re_path
+from django.views.static import serve
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 
 urlpatterns = [
@@ -31,9 +31,16 @@ urlpatterns = [
 
 # Serve user uploads (photos, CVs, videos) from the app itself.
 #
-# Django refuses to serve MEDIA_URL when DEBUG=False — normally that's the job of
-# nginx or object storage. With uploads on a Render persistent disk and no S3
-# bucket configured, Django has to do it, so SERVE_MEDIA opts back in. It's set
-# automatically in production.py only when no S3 bucket is present.
+# NOTE: django.conf.urls.static.static() is a no-op when DEBUG=False — it returns
+# an empty list, silently registering no route at all. So the serve view is wired
+# up directly. Needed because uploads live on a Render persistent disk rather
+# than object storage; when an S3 bucket IS configured, production.py sets
+# SERVE_MEDIA=False and S3 serves the files instead.
 if settings.DEBUG or getattr(settings, "SERVE_MEDIA", False):
-    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+    urlpatterns += [
+        re_path(
+            r"^media/(?P<path>.*)$",
+            serve,
+            {"document_root": settings.MEDIA_ROOT},
+        ),
+    ]
