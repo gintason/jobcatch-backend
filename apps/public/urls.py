@@ -7,6 +7,7 @@ from .views import (
     FeaturedJobList,
     PublicCategoryList,
     PublicJobBrowse,
+    PublicStats,
 )
 
 urlpatterns = [
@@ -16,4 +17,5 @@ urlpatterns = [
     path("public/artisans/<uuid:id>/", ArtisanDetail.as_view(), name="public-artisan-detail"),
     path("public/featured-jobs/", FeaturedJobList.as_view(), name="public-featured-jobs"),
     path("public/jobs/", PublicJobBrowse.as_view(), name="public-job-browse"),
+    path("public/stats/", PublicStats.as_view(), name="public-stats"),
 ]

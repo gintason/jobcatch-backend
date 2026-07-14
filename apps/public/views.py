@@ -5,13 +5,15 @@ Listings are ranked by the owner's active subscription tier (premium > pro >
 free/none) so paid placements surface first, then by rating/recency.
 """
 from django.db.models import (
-    Case, Count, IntegerField, OuterRef, Q, Subquery, When,
+    Avg, Case, Count, IntegerField, OuterRef, Q, Subquery, Sum, When,
 )
 from rest_framework.generics import ListAPIView, RetrieveAPIView
 from rest_framework.permissions import AllowAny
+from rest_framework.response import Response
+from rest_framework.views import APIView
 
 from apps.accounts.models import ArtisanProfile
-from apps.catalog.models import Category
+from apps.catalog.models import Category, CategoryKind
 from apps.jobs.models import Job
 from apps.subscriptions.models import Subscription
 
@@ -144,3 +146,50 @@ class PublicJobBrowse(ListAPIView):
         if q:
             qs = qs.filter(Q(title__icontains=q) | Q(description__icontains=q))
         return qs.order_by("tier", "-created_at")
+
+
+class PublicStats(APIView):
+    """
+    Real social proof for the hero: genuine counts, genuine ratings, genuine
+    artisans. Placeholder numbers ("2,000+ verified artisans") are a lie to
+    visitors and corrosive on a marketplace whose whole product is trust, so
+    everything here is computed from the database. Small numbers are reported
+    honestly; the frontend decides how to present them.
+    """
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        artisans = ArtisanProfile.objects.all()
+        verified = artisans.filter(
+            Q(is_work_verified=True) | Q(user__is_identity_verified=True)
+        )
+
+        rated = artisans.filter(rating_count__gt=0)
+        agg = rated.aggregate(
+            avg=Avg("avg_rating"),
+            reviews=Sum("rating_count"),
+        )
+
+        # Spotlight: verified and paid artisans first — the ones we're happy to
+        # put a face to. Only those with a portfolio photo, since the hero cards
+        # are visual.
+        spotlight = (
+            ArtisanProfile.objects
+            .select_related("user")
+            .prefetch_related("services__category", "portfolio")
+            .annotate(plan=Subquery(_active_plan_for("user")))
+            .annotate(tier=_tier_case())
+            .filter(portfolio__isnull=False)
+            .distinct()
+            .order_by("tier", "-avg_rating", "-rating_count")[:4]
+        )
+
+        return Response({
+            "artisan_count": artisans.count(),
+            "verified_count": verified.count(),
+            "review_count": agg["reviews"] or 0,
+            "avg_rating": round(float(agg["avg"]), 1) if agg["avg"] else None,
+            "spotlight": PublicArtisanSerializer(
+                spotlight, many=True, context={"request": request}
+            ).data,
+        })
