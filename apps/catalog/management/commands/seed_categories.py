@@ -38,6 +38,17 @@ HOME_SERVICES = [
     "Mason/Tiler",
     "POP Installer",
     "I.T Support",
+    # --- added on client request ---
+    "Seamstress",
+    "Video Coverage",
+    "Roof Installer",
+    "Electric Fence Wire",
+    "Disc Jockey (DJ)",
+    "Concrete Stamping",
+    "Artist",
+    "Equipment Rentals",
+    "Engineers",
+    "Architects",
 ]
 
 JOB_CATEGORIES = [
@@ -105,21 +116,57 @@ JOB_CATEGORIES = [
 
 
 class Command(BaseCommand):
-    help = "Seed home-service and job-listing categories (idempotent)."
+    help = "Seed home-service and job-listing categories."
+
+    def add_arguments(self, parser):
+        parser.add_argument(
+            "--prune",
+            action="store_true",
+            help="Delete categories not in these lists (only if unused by any service/job).",
+        )
 
     def handle(self, *args, **options):
-        for kind, names in (
-            (CategoryKind.HOME_SERVICE, HOME_SERVICES),
-            (CategoryKind.JOB, JOB_CATEGORIES),
-        ):
-            created = 0
+        created = {"home_service": 0, "job": 0}
+
+        for names, kind in ((HOME_SERVICES, CategoryKind.HOME_SERVICE),
+                            (JOB_CATEGORIES, CategoryKind.JOB)):
             for name in names:
-                _, was_created = Category.objects.get_or_create(
+                _, made = Category.objects.get_or_create(
                     kind=kind, name=name, defaults={"slug": slugify(name)},
                 )
-                created += int(was_created)
-            total = Category.objects.filter(kind=kind).count()
-            label = kind.label
-            self.stdout.write(
-                self.style.SUCCESS(f"{label}: +{created} (total {total})")
-            )
+                if made:
+                    created[kind] += 1
+
+        self.stdout.write(self.style.SUCCESS(
+            f"Home services: +{created['home_service']} "
+            f"(total {Category.objects.filter(kind=CategoryKind.HOME_SERVICE).count()})"
+        ))
+        self.stdout.write(self.style.SUCCESS(
+            f"Job listings: +{created['job']} "
+            f"(total {Category.objects.filter(kind=CategoryKind.JOB).count()})"
+        ))
+
+        if options["prune"]:
+            self._prune()
+
+    def _prune(self):
+        """Remove stale categories, but never one that's still in use."""
+        keep_home = set(HOME_SERVICES)
+        keep_job = set(JOB_CATEGORIES)
+        removed, kept = 0, []
+
+        for cat in Category.objects.all():
+            wanted = keep_home if cat.kind == CategoryKind.HOME_SERVICE else keep_job
+            if cat.name in wanted:
+                continue
+            if cat.services.exists() or getattr(cat, "jobs", cat.services.none()).exists():
+                kept.append(cat.name)
+                continue
+            cat.delete()
+            removed += 1
+
+        self.stdout.write(self.style.WARNING(f"Pruned {removed} unused category(ies)."))
+        if kept:
+            self.stdout.write(self.style.WARNING(
+                "Kept (still in use — reassign before pruning): " + ", ".join(kept)
+            ))
