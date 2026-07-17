@@ -103,6 +103,7 @@ class PublicArtisanDetailSerializer(serializers.ModelSerializer):
         model = ArtisanProfile
         fields = ("id", "full_name", "bio", "avg_rating", "rating_count",
                   "is_featured", "is_verified", "service_radius_km",
+                  "city", "area", "state",
                   "services", "portfolio", "reviews", "tier", "phone")
 
     def get_phone(self, obj):
