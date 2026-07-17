@@ -213,7 +213,7 @@ PAYMENT_CALLBACK_URL = env(
 )
 
 # --- Geo-matching engine ---
-MATCHING_DEFAULT_RADIUS_KM = 20
+MATCHING_DEFAULT_RADIUS_KM = 25
 MATCHING_WEIGHTS = {          # must sum to 1.0; tune without code changes
     "proximity": 0.40,
     "rating": 0.30,

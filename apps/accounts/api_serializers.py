@@ -58,6 +58,7 @@ class ArtisanProfileSerializer(_LocationMixin):
         model = ArtisanProfile
         fields = (
             "bio", "phone", "show_phone", "service_radius_km", "is_available",
+            "city", "area", "state",
             "latitude", "longitude", "location",
             # read-only, system-managed:
             "avg_rating", "rating_count", "reputation_score",

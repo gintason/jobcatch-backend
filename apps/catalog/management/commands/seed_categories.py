@@ -49,6 +49,13 @@ HOME_SERVICES = [
     "Equipment Rentals",
     "Engineers",
     "Architects",
+    # --- added on client request (batch 2) ---
+    "Printer",
+    "Mechanic",
+    "Machine Operator",
+    "Iron Bender",
+    "Aluminium Jobs",
+    "Panel Beater",
 ]
 
 JOB_CATEGORIES = [
@@ -131,8 +138,13 @@ class Command(BaseCommand):
         for names, kind in ((HOME_SERVICES, CategoryKind.HOME_SERVICE),
                             (JOB_CATEGORIES, CategoryKind.JOB)):
             for name in names:
+                slug = slugify(name)
+                # The DB unique constraint is on (kind, slug), so look up by slug
+                # — not name — to avoid a UniqueViolation when two different names
+                # slugify to the same value (e.g. "I.T Support" and "IT Support"
+                # both -> "it-support"). Existing rows are left untouched.
                 _, made = Category.objects.get_or_create(
-                    kind=kind, name=name, defaults={"slug": slugify(name)},
+                    kind=kind, slug=slug, defaults={"name": name},
                 )
                 if made:
                     created[kind] += 1
