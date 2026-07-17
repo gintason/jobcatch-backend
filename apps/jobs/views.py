@@ -54,10 +54,12 @@ class JobViewSet(viewsets.ModelViewSet):
         if self.action not in ("list", "retrieve"):
             return qs.filter(employer=self.request.user.employer_profile)
         # ?mine=true -> the employer's own jobs (incl. closed).
+
         user = self.request.user
-        if (self.request.query_params.get("mine") == "true"
-                and getattr(user, "role", None) == "employer"):
-            return qs.filter(employer=user.employer_profile)
+        employer_profile = getattr(user, "employer_profile", None)
+        if self.request.query_params.get("mine") == "true" and employer_profile:
+            return qs.filter(employer=employer_profile)
+        
         # Public browse: open jobs, with optional ?category= and ?q= (title search).
         category = self.request.query_params.get("category")
         q = self.request.query_params.get("q")
@@ -92,13 +94,21 @@ class ApplicationViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
         qs = Application.objects.select_related("job__employer__user", "seeker__user")
-        if user.role == UserRole.JOB_SEEKER:
-            return qs.filter(seeker__user=user)          # track own applications
-        if user.role == UserRole.EMPLOYER:
-            return qs.filter(job__employer__user=user)   # applicants to own jobs
         if user.role == UserRole.ADMIN:
             return qs
-        return qs.none()
+        # Paired roles: a supply-side user (artisan/job_seeker) tracks their own
+        # applications; a demand-side user (customer/employer) sees applicants to
+        # their own jobs. Every user now has both profiles, so scope by profile.
+        from django.db.models import Q
+        conditions = Q()
+        if getattr(user, "job_seeker_profile", None):
+            conditions |= Q(seeker__user=user)
+        if getattr(user, "employer_profile", None):
+            conditions |= Q(job__employer__user=user)
+        if not conditions:
+            return qs.none()
+        return qs.filter(conditions)
+    
 
     def list(self, request, *args, **kwargs):
         qs = self.get_queryset()
