@@ -22,6 +22,7 @@ class PaymentPurpose(models.TextChoices):
     SUBSCRIPTION = "subscription", "Subscription"
     JOB_POSTING = "job_posting", "Job posting"
     VERIFICATION = "verification", "Verification"
+    CV_SERVICE = "cv_service", "CV Service"      
 
 
 class Payment(BaseModel):
