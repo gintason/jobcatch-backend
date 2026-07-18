@@ -28,6 +28,7 @@ urlpatterns = [
     path("api/v1/", include("apps.messaging.urls")),       # conversations + message history
     path("api/v1/", include("apps.ai.urls")),              # AI chatbot (RAG + tools)
     path("api/v1/", include("apps.public.urls")),          # public home-page data (no auth)
+    path("api/v1/", include("apps.cvservice.urls")),      # paid CV service
 
     # --- OpenAPI schema + docs ---
     path("api/schema/", SpectacularAPIView.as_view(), name="schema"),

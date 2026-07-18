@@ -20,7 +20,22 @@ def fulfill_payment(payment):
     """Run side effects once a payment is confirmed successful."""
     if payment.purpose == PaymentPurpose.SUBSCRIPTION:
         _activate_subscription(payment)
+    elif payment.purpose == PaymentPurpose.CV_SERVICE:
+        _grant_cv_service(payment)
     # BOOKING payments are recorded via the Payment row; no booking mutation needed.
+
+
+def _grant_cv_service(payment):
+    """Unlock the one-off concierge CV service for the payer."""
+    from apps.cvservice.models import CVServiceAccess
+
+    access, _ = CVServiceAccess.objects.get_or_create(user=payment.payer)
+    if access.is_active:
+        return  # already unlocked — idempotent
+    access.is_active = True
+    access.paid_at = timezone.now()
+    access.payment_reference = payment.reference
+    access.save(update_fields=["is_active", "paid_at", "payment_reference", "updated_at"])
 
 
 def _activate_subscription(payment):

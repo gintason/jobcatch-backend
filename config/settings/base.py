@@ -52,6 +52,7 @@ LOCAL_APPS = [
     "apps.payments",
     "apps.subscriptions",
     "apps.jobs",
+    "apps.cvservice",
     "apps.reviews",
     "apps.messaging",
     "apps.notifications",
