@@ -45,6 +45,10 @@ class InitializePaymentView(APIView):
         if purpose == PaymentPurpose.BOOKING:
             booking = ser.validated_data["booking"]
             amount = booking.agreed_price
+            
+        elif purpose == PaymentPurpose.CV_SERVICE:
+            booking = None
+            amount = settings.CV_SERVICE_PRICE
         else:
             plan = ser.validated_data["plan"]
             booking = None

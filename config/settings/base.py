@@ -208,6 +208,8 @@ SUBSCRIPTION_PRICES = {                       # Naira
     "premium": Decimal("5000.00"),            # top tier — most visibility
     "pro": Decimal("2500.00"),
 }
+CV_SERVICE_PRICE = 5000  # Naira, one-off concierge CV service
+
 PAYMENT_CALLBACK_URL = env(
     "PAYMENT_CALLBACK_URL", default="https://jobcatchonline.com/payments/callback"
 )

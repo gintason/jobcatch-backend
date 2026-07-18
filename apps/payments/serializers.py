@@ -7,7 +7,11 @@ from .models import Payment, PaymentPurpose
 
 class PaymentInitializeSerializer(serializers.Serializer):
     purpose = serializers.ChoiceField(
-        choices=[PaymentPurpose.BOOKING, PaymentPurpose.SUBSCRIPTION]
+        choices=[
+            PaymentPurpose.BOOKING,
+            PaymentPurpose.SUBSCRIPTION,
+            PaymentPurpose.CV_SERVICE,
+        ]
     )
     booking = serializers.PrimaryKeyRelatedField(
         queryset=Booking.objects.all(), required=False
