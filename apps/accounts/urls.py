@@ -16,4 +16,5 @@ urlpatterns = [
     path("me/", views.MeView.as_view(), name="me"),
     path("sessions/", views.SessionListView.as_view(), name="sessions"),
     path("sessions/<uuid:session_id>/", views.SessionListView.as_view(), name="session-detail"),
+    path("switch-role/", views.SwitchRoleView.as_view(), name="switch-role"),
 ]

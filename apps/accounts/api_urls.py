@@ -11,4 +11,5 @@ router.register("artisan/job-videos", api_views.ArtisanJobVideoViewSet, basename
 urlpatterns = [
     path("me/profile/", api_views.MyProfileView.as_view(), name="my-profile"),
     path("", include(router.urls)),
+    
 ]

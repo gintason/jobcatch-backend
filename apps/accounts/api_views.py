@@ -1,6 +1,11 @@
 """Self-service profile management views (Phase 2A)."""
 from rest_framework import generics, viewsets
 from rest_framework.exceptions import PermissionDenied
+from rest_framework import status
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated
+from .models import UserRole
 
 from apps.common.permissions import IsArtisan
 
@@ -54,3 +59,35 @@ class ArtisanJobVideoViewSet(_ArtisanOwnedViewSet):
 
     queryset = ArtisanJobVideo.objects.all()
     serializer_class = ArtisanJobVideoSerializer
+
+class SwitchRoleView(APIView):
+    """
+    Switch the caller's ACTIVE role (single-account, multi-mode platform).
+
+    Role is a mode, not an identity. Every user owns all four profiles, so this
+    only flips which mode permissions resolve against — no data is created or
+    destroyed. Permissions read `role` from the DB, not the JWT claim, so the
+    switch takes effect on the very next request with no token refresh.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    SWITCHABLE = {
+        UserRole.CUSTOMER,
+        UserRole.ARTISAN,
+        UserRole.EMPLOYER,
+        UserRole.JOB_SEEKER,
+    }
+
+    def post(self, request):
+        role = request.data.get("role")
+        if role not in self.SWITCHABLE:
+            return Response(
+                {"detail": "Invalid role.", "code": "invalid_role"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        user = request.user
+        if user.role != role:
+            user.role = role
+            user.save(update_fields=["role"])
+        return Response({"id": str(user.id), "role": user.role})
