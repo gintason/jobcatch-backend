@@ -1,14 +1,14 @@
-"""Create the user's role profile(s) whenever a user is created.
+"""Create every role profile when a user is created.
 
-Multi-role pairing: JobCatch lets one account act on both sides of a paired
-role, so on registration we create BOTH profiles in the user's capability pair
-(not just the primary one). This guarantees request.user.<profile> always
-exists for any capability the user is allowed to exercise:
+JobCatch is a single-account platform: a user signs up once (no role chosen),
+then picks how they want to use the platform from the role hub, switching
+freely between Customer, Artisan, Employer and Job Seeker.
 
-    customer / employer  -> both CustomerProfile AND EmployerProfile
-    artisan  / job_seeker-> both ArtisanProfile  AND JobSeekerProfile
+For that to work, every user owns ALL FOUR profiles from the moment they
+register, so whichever mode they switch into, `request.user.<x>_profile`
+already exists and the viewsets never 404.
 
-ADMIN has no domain profile.
+ADMIN accounts get profiles too (harmless) so staff can inspect any flow.
 """
 from django.db.models.signals import post_save
 from django.dispatch import receiver
@@ -19,31 +19,28 @@ from .models import (
     EmployerProfile,
     JobSeekerProfile,
     User,
-    UserRole,
 )
 
-# Each role maps to the FULL set of profiles that role's capabilities need.
-_PROFILES_FOR_ROLE = {
-    UserRole.CUSTOMER: (CustomerProfile, EmployerProfile),
-    UserRole.EMPLOYER: (EmployerProfile, CustomerProfile),
-    UserRole.ARTISAN: (ArtisanProfile, JobSeekerProfile),
-    UserRole.JOB_SEEKER: (JobSeekerProfile, ArtisanProfile),
-    # ADMIN has no domain profile.
-}
+ALL_PROFILE_MODELS = (
+    CustomerProfile,
+    ArtisanProfile,
+    EmployerProfile,
+    JobSeekerProfile,
+)
 
 
 def _create_profile(profile_model, user):
-    """Create one profile, filling any required non-blank fields with sane defaults."""
+    """Create one profile, filling required non-blank fields with sane defaults."""
     defaults = {}
     if profile_model is EmployerProfile:
-        # company_name is required; the user edits it later.
+        # company_name is required; the employer edits it on their dashboard.
         defaults["company_name"] = user.full_name or "Unnamed Company"
     profile_model.objects.get_or_create(user=user, defaults=defaults)
 
 
 @receiver(post_save, sender=User)
-def create_role_profile(sender, instance, created, **kwargs):
+def create_role_profiles(sender, instance, created, **kwargs):
     if not created:
         return
-    for profile_model in _PROFILES_FOR_ROLE.get(instance.role, ()):  # noqa: B007
+    for profile_model in ALL_PROFILE_MODELS:
         _create_profile(profile_model, instance)
