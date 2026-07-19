@@ -2,7 +2,20 @@
 Public, unauthenticated endpoints for the home page + browse/profile pages.
 
 Listings are ranked by the owner's active subscription tier (premium > pro >
-free/none) so paid placements surface first, then by rating/recency.
+free/none) so paid placements surface first, then by verification, then by
+rating/recency.
+
+IMPORTANT — who counts as an artisan:
+JobCatch is a single-account platform. Every user is given all four role
+profiles on registration so they can switch modes freely, which means an
+ArtisanProfile row existing says nothing about whether that person actually
+offers services. A customer, employer or job seeker who merely glanced at the
+Artisan role would otherwise appear in browse, search, featured listings and
+the hero stats.
+
+So every public artisan listing is filtered through `_real_artisans()`: only
+profiles with at least one ACTIVE service are treated as artisans. Publishing a
+service is the deliberate act that makes someone an artisan on the platform.
 """
 from django.db.models import (
     Avg, Case, Count, IntegerField, OuterRef, Q, Subquery, Sum, When,
@@ -42,6 +55,37 @@ def _active_plan_for(outer_field):
     ).order_by("-started_at").values("plan")[:1]
 
 
+def _real_artisans():
+    """
+    Base queryset for anyone the public should see as an artisan.
+
+    An ArtisanProfile alone isn't enough — every account has one. Only people
+    who have published at least one active service are listed.
+    """
+    return (
+        ArtisanProfile.objects
+        .filter(services__is_active=True)
+        .select_related("user")
+        .prefetch_related("services__category", "portfolio")
+        .annotate(plan=Subquery(_active_plan_for("user")))
+        .annotate(tier=_tier_case())
+        .distinct()
+    )
+
+
+# Paid placement first, then verified, then reputation. `is_work_verified`
+# covers JobCatch's own work verification; identity verification lives on the
+# user and is included so both badges lift a listing.
+ARTISAN_ORDERING = (
+    "tier",
+    "-is_work_verified",
+    "-user__is_identity_verified",
+    "-avg_rating",
+    "-rating_count",
+    "-created_at",
+)
+
+
 class PublicCategoryList(ListAPIView):
     permission_classes = [AllowAny]
     serializer_class = PublicCategorySerializer
@@ -64,14 +108,7 @@ class FeaturedArtisanList(ListAPIView):
     pagination_class = None
 
     def get_queryset(self):
-        return (
-            ArtisanProfile.objects
-            .select_related("user")
-            .prefetch_related("services__category", "portfolio")
-            .annotate(plan=Subquery(_active_plan_for("user")))
-            .annotate(tier=_tier_case())
-            .order_by("tier", "-avg_rating", "-rating_count", "-created_at")[:8]
-        )
+        return _real_artisans().order_by(*ARTISAN_ORDERING)[:8]
 
 
 class ArtisanBrowseList(ListAPIView):
@@ -81,11 +118,7 @@ class ArtisanBrowseList(ListAPIView):
     serializer_class = PublicArtisanSerializer
 
     def get_queryset(self):
-        qs = (ArtisanProfile.objects
-              .select_related("user")
-              .prefetch_related("services__category", "portfolio")
-              .annotate(plan=Subquery(_active_plan_for("user")))
-              .annotate(tier=_tier_case()))
+        qs = _real_artisans()
         category = self.request.query_params.get("category")
         q = self.request.query_params.get("q")
         if category:
@@ -99,10 +132,19 @@ class ArtisanBrowseList(ListAPIView):
                 | Q(services__title__icontains=q)
                 | Q(services__category__name__icontains=q)
             ).distinct()
-        return qs.order_by("tier", "-avg_rating", "-rating_count", "-created_at")
+        return qs.order_by(*ARTISAN_ORDERING)
 
 
 class ArtisanDetail(RetrieveAPIView):
+    """
+    A single artisan's public profile.
+
+    Deliberately NOT filtered by `_real_artisans()`: an artisan who temporarily
+    deactivates their last service should still be reachable by anyone holding
+    a direct link (e.g. from an existing booking or a shared URL). They simply
+    stop appearing in browse and featured listings.
+    """
+
     permission_classes = [AllowAny]
     serializer_class = PublicArtisanDetailSerializer
     lookup_field = "id"
@@ -155,11 +197,15 @@ class PublicStats(APIView):
     visitors and corrosive on a marketplace whose whole product is trust, so
     everything here is computed from the database. Small numbers are reported
     honestly; the frontend decides how to present them.
+
+    Counts use `_real_artisans()` for the same reason the listings do — every
+    account owns an ArtisanProfile, so counting rows would badly overstate how
+    many artisans actually offer services.
     """
     permission_classes = [AllowAny]
 
     def get(self, request):
-        artisans = ArtisanProfile.objects.all()
+        artisans = _real_artisans()
         verified = artisans.filter(
             Q(is_work_verified=True) | Q(user__is_identity_verified=True)
         )
@@ -174,14 +220,10 @@ class PublicStats(APIView):
         # put a face to. Only those with a portfolio photo, since the hero cards
         # are visual.
         spotlight = (
-            ArtisanProfile.objects
-            .select_related("user")
-            .prefetch_related("services__category", "portfolio")
-            .annotate(plan=Subquery(_active_plan_for("user")))
-            .annotate(tier=_tier_case())
+            _real_artisans()
             .filter(portfolio__isnull=False)
             .distinct()
-            .order_by("tier", "-avg_rating", "-rating_count")[:4]
+            .order_by(*ARTISAN_ORDERING)[:4]
         )
 
         return Response({

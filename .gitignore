@@ -6,3 +6,4 @@ staticfiles/
 media/
 .pytest_cache/
 .venv/
+*.zip
