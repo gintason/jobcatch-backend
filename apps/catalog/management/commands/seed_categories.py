@@ -56,6 +56,10 @@ HOME_SERVICES = [
     "Iron Bender",
     "Aluminium Jobs",
     "Panel Beater",
+    # --- added on client request (batch 3) ---
+    "Borehole Drilling and Installation",
+    "Cleaning and Fumigation",
+    "Intellectual Property Protection and Registration",
 ]
 
 JOB_CATEGORIES = [
