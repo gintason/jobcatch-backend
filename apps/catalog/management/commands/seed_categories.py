@@ -23,19 +23,19 @@ HOME_SERVICES = [
     "Cleaner",
     "Housekeeper",
     "Chef/Cook",
-    "Driver",
+    "Floor Tiler",
     "Gardener",
     "Tailor/Fashion Designer",
     "Makeup Artist",
     "Hair Stylist/Barber",
     "Photographer",
     "Event Planner",
-    "Security Guard",
+    "Baker/Confectionery",
     "Laundry Service",
     "Pest Control Technician",
-    "Furniture Installer",
+    "Furniture Maker",
     "Appliance Repair Technician",
-    "Mason/Tiler",
+    "Mason/Bricklayer",
     "POP Installer",
     "I.T Support",
     # --- added on client request ---
@@ -59,7 +59,7 @@ HOME_SERVICES = [
     # --- added on client request (batch 3) ---
     "Borehole Drilling and Installation",
     "Cleaning and Fumigation",
-    "Intellectual Property Protection and Registration",
+    "Leather Bag and Shoe Maker",
 ]
 
 JOB_CATEGORIES = [
