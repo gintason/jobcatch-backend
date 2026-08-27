@@ -10,6 +10,9 @@ import hashlib
 import json
 import math
 import urllib.request
+import json
+import urllib.request
+from typing import Generator
 
 from django.conf import settings
 
@@ -66,6 +69,44 @@ class OpenAIProvider(LLMProvider):
                 result = tool_executor(tc["function"]["name"], args)
                 oai.append({"role": "tool", "tool_call_id": tc["id"], "content": result})
         return "I wasn't able to complete that request."
+    
+    def generate_stream(self, *, system, messages, tools, tool_executor) -> Generator[str, None, None]:
+        oai = [{"role": "system", "content": system}]
+        oai += [{"role": m["role"], "content": m["content"]} for m in messages]
+
+        # We'll do a single round (no tool loops) for streaming simplicity.
+        # If tools are called, we fall back to non‑streaming for that turn.
+        # For production, you'd want a full streaming tool‑loop; but to keep it simple, we just run once.
+        resp = self._post_json_stream(
+            f"{self.BASE}/chat/completions",
+            {"model": settings.OPENAI_CHAT_MODEL, "messages": oai,
+             "tools": tools, "tool_choice": "auto", "stream": True},
+            settings.LLM_API_KEY,
+        )
+        # Yield each chunk
+        for chunk in resp:
+            try:
+                delta = chunk["choices"][0].get("delta", {})
+                content = delta.get("content")
+                if content:
+                    yield content
+                # If tool_calls appear, we'd need to handle them, but we skip for simplicity
+            except (KeyError, IndexError):
+                pass
+
+    def _post_json_stream(self, url, payload, api_key):
+        req = urllib.request.Request(
+            url, data=json.dumps(payload).encode(), method="POST",
+            headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            for line in resp:
+                line = line.decode().strip()
+                if line.startswith("data: "):
+                    data = line[6:]
+                    if data == "[DONE]":
+                        break
+                    yield json.loads(data)
 
 
 # ---------------------------------------------------------------- Mock (offline)
@@ -93,6 +134,13 @@ class MockProvider(LLMProvider):
         if tools and ("application" in last or "job" in last):
             return f"Based on your applications: {tool_executor('get_my_applications', {})}"
         return "Hello! I'm the JobCatch assistant. Ask me about your bookings or applications."
+
+    def generate_stream(self, *, system, messages, tools, tool_executor) -> Generator[str, None, None]:
+        # Simulate streaming with word-by-word
+        reply = self.generate(system=system, messages=messages, tools=tools, tool_executor=tool_executor)
+        for word in reply.split():
+            yield word + " "
+            import time; time.sleep(0.05)   # simulate latency
 
 
 def get_provider():

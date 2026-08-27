@@ -24,6 +24,11 @@ FAQ = [
     ("Applying for jobs",
      "Job seekers upload a CV (and NYSC certificate if a graduate), search open jobs, "
      "and apply. Employers can shortlist, reject, or hire applicants."),
+      ("Booking lifecycle", "A booking starts as 'pending'. The artisan can accept or cancel; the customer can also cancel. Once accepted, it moves to 'accepted', then the artisan can start work ('in_progress'), then complete it. After completion, the customer can leave a review."),
+    ("Application process", "Job seekers apply with a CV. Employers can shortlist, reject, or hire. Once hired, a chat is opened."),
+    ("Verification badges", "The blue checkmark on artisans means they have submitted a government ID and a work video, approved by admin. Employers get a badge after uploading a CAC certificate."),
+    ("Subscription benefits", "Premium and Pro subscribers appear higher in search results and are featured on the home page. This is visibility, not trust."),
+    ("Payment security", "All payments are handled by Paystack. JobCatch never stores your card number."),
 ]
 
 
