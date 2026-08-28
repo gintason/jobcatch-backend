@@ -1,16 +1,15 @@
 """
 LLM provider abstraction.
 
-Providers implement embed() and generate(). generate() runs the full tool-calling
-loop internally so provider-specific message formats stay encapsulated. The vendor
-is chosen by settings.LLM_PROVIDER; a Mock provider runs fully offline (no key) and
-is the default, so dev and tests never require network access.
+Providers implement embed() and generate()/generate_stream(). Both run the full
+tool-calling loop internally so provider-specific message formats stay
+encapsulated. The vendor is chosen by settings.LLM_PROVIDER; a Mock provider runs
+fully offline (no key) and is the default, so dev and tests never require network
+access.
 """
 import hashlib
 import json
 import math
-import urllib.request
-import json
 import urllib.request
 from typing import Generator
 
@@ -33,6 +32,9 @@ class LLMProvider:
         raise NotImplementedError
 
     def generate(self, *, system, messages, tools, tool_executor):
+        raise NotImplementedError
+
+    def generate_stream(self, *, system, messages, tools, tool_executor):
         raise NotImplementedError
 
 
@@ -69,44 +71,91 @@ class OpenAIProvider(LLMProvider):
                 result = tool_executor(tc["function"]["name"], args)
                 oai.append({"role": "tool", "tool_call_id": tc["id"], "content": result})
         return "I wasn't able to complete that request."
-    
-    def generate_stream(self, *, system, messages, tools, tool_executor) -> Generator[str, None, None]:
+
+    def generate_stream(
+        self, *, system, messages, tools, tool_executor
+    ) -> Generator[str, None, None]:
+        """
+        Streaming with a full tool-calling loop.
+
+        Each round streams the model's turn. If the turn is plain text we yield
+        the tokens and finish. If the model asks for tools, we accumulate the
+        (fragmented) tool_call deltas, execute them, append the results, and loop
+        so the *next* turn streams the grounded answer. This is why "what's the
+        status of my booking?" works while streaming — the earlier version
+        dropped tool calls and answered from the prompt alone.
+        """
         oai = [{"role": "system", "content": system}]
         oai += [{"role": m["role"], "content": m["content"]} for m in messages]
 
-        # We'll do a single round (no tool loops) for streaming simplicity.
-        # If tools are called, we fall back to non‑streaming for that turn.
-        # For production, you'd want a full streaming tool‑loop; but to keep it simple, we just run once.
-        resp = self._post_json_stream(
-            f"{self.BASE}/chat/completions",
-            {"model": settings.OPENAI_CHAT_MODEL, "messages": oai,
-             "tools": tools, "tool_choice": "auto", "stream": True},
-            settings.LLM_API_KEY,
-        )
-        # Yield each chunk
-        for chunk in resp:
-            try:
-                delta = chunk["choices"][0].get("delta", {})
+        for _ in range(settings.AI_MAX_TOOL_ROUNDS):
+            assistant_content = ""
+            tool_calls: dict[int, dict] = {}  # index -> {id, name, arguments}
+
+            for chunk in self._post_json_stream(
+                f"{self.BASE}/chat/completions",
+                {"model": settings.OPENAI_CHAT_MODEL, "messages": oai,
+                 "tools": tools, "tool_choice": "auto", "stream": True},
+                settings.LLM_API_KEY,
+            ):
+                choice = (chunk.get("choices") or [{}])[0]
+                delta = choice.get("delta") or {}
+
                 content = delta.get("content")
                 if content:
+                    assistant_content += content
                     yield content
-                # If tool_calls appear, we'd need to handle them, but we skip for simplicity
-            except (KeyError, IndexError):
-                pass
+
+                for tc in delta.get("tool_calls") or []:
+                    idx = tc.get("index", 0)
+                    slot = tool_calls.setdefault(idx, {"id": "", "name": "", "arguments": ""})
+                    if tc.get("id"):
+                        slot["id"] = tc["id"]
+                    fn = tc.get("function") or {}
+                    if fn.get("name"):
+                        slot["name"] = fn["name"]
+                    if fn.get("arguments"):
+                        slot["arguments"] += fn["arguments"]
+
+            # Plain-text turn: we've already streamed the whole answer.
+            if not tool_calls:
+                return
+
+            # Reconstruct the assistant tool-call turn, then execute each tool.
+            oai.append({
+                "role": "assistant",
+                "content": assistant_content or None,
+                "tool_calls": [
+                    {"id": s["id"], "type": "function",
+                     "function": {"name": s["name"], "arguments": s["arguments"] or "{}"}}
+                    for s in tool_calls.values()
+                ],
+            })
+            for s in tool_calls.values():
+                args = json.loads(s["arguments"] or "{}")
+                result = tool_executor(s["name"], args)
+                oai.append({"role": "tool", "tool_call_id": s["id"], "content": result})
+            # loop -> next turn streams the grounded reply (or more tools)
+
+        yield "I wasn't able to complete that request."
 
     def _post_json_stream(self, url, payload, api_key):
         req = urllib.request.Request(
             url, data=json.dumps(payload).encode(), method="POST",
             headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
         )
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            for line in resp:
-                line = line.decode().strip()
-                if line.startswith("data: "):
-                    data = line[6:]
-                    if data == "[DONE]":
-                        break
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            for raw in resp:
+                line = raw.decode().strip()
+                if not line.startswith("data: "):
+                    continue
+                data = line[6:]
+                if data == "[DONE]":
+                    break
+                try:
                     yield json.loads(data)
+                except json.JSONDecodeError:
+                    continue
 
 
 # ---------------------------------------------------------------- Mock (offline)
@@ -135,12 +184,15 @@ class MockProvider(LLMProvider):
             return f"Based on your applications: {tool_executor('get_my_applications', {})}"
         return "Hello! I'm the JobCatch assistant. Ask me about your bookings or applications."
 
-    def generate_stream(self, *, system, messages, tools, tool_executor) -> Generator[str, None, None]:
-        # Simulate streaming with word-by-word
-        reply = self.generate(system=system, messages=messages, tools=tools, tool_executor=tool_executor)
+    def generate_stream(
+        self, *, system, messages, tools, tool_executor
+    ) -> Generator[str, None, None]:
+        # Simulate streaming word-by-word (no artificial latency in tests).
+        reply = self.generate(
+            system=system, messages=messages, tools=tools, tool_executor=tool_executor
+        )
         for word in reply.split():
             yield word + " "
-            import time; time.sleep(0.05)   # simulate latency
 
 
 def get_provider():

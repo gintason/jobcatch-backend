@@ -1,7 +1,12 @@
 """Seed the knowledge base with FAQ entries and embed them.
 
 Usage: python manage.py seed_kb   (idempotent)
-Uses the configured provider for embeddings (mock offline by default).
+
+Embeddings are produced with the CURRENTLY configured provider. This matters:
+mock embeddings are 64-dim and OpenAI embeddings are 1536-dim, and retrieval
+compares them directly. If you switch LLM_PROVIDER, re-seed so the stored vectors
+match the query-time provider — run `seed_kb` again after clearing KBChunk, or
+change a chunk's title so this command re-embeds it.
 """
 from django.core.management.base import BaseCommand
 
@@ -13,22 +18,43 @@ FAQ = [
      "To book an artisan, search by service and location, pick a service, choose a "
      "time, and pay. Your booking moves through pending, accepted, in progress, and completed."),
     ("Payments",
-     "JobCatch supports card payments via Paystack. A platform commission applies to "
-     "each booking. You can view your transaction history in your account."),
+     "JobCatch supports card payments via Paystack. A 10% platform commission applies to "
+     "each booking payment. You can view your transaction history in your account."),
     ("Subscriptions",
-     "Artisans can subscribe to Premium or Pro plans for featured, boosted listings "
-     "in search results."),
+     "Artisans can subscribe to Premium (5,000 naira/month) or Pro (2,500 naira/month) plans "
+     "for featured, boosted listings in search results. A subscription lasts 30 days."),
     ("Verification",
-     "Artisans upload ID and job-sample videos; employers upload CAC documents. An "
-     "admin reviews submissions and grants a verified badge on approval."),
+     "Artisans upload a government ID and job-sample videos; employers upload a CAC certificate. "
+     "An admin reviews submissions and grants a verified badge on approval. Badges are earned, not bought."),
     ("Applying for jobs",
-     "Job seekers upload a CV (and NYSC certificate if a graduate), search open jobs, "
-     "and apply. Employers can shortlist, reject, or hire applicants."),
-      ("Booking lifecycle", "A booking starts as 'pending'. The artisan can accept or cancel; the customer can also cancel. Once accepted, it moves to 'accepted', then the artisan can start work ('in_progress'), then complete it. After completion, the customer can leave a review."),
-    ("Application process", "Job seekers apply with a CV. Employers can shortlist, reject, or hire. Once hired, a chat is opened."),
-    ("Verification badges", "The blue checkmark on artisans means they have submitted a government ID and a work video, approved by admin. Employers get a badge after uploading a CAC certificate."),
-    ("Subscription benefits", "Premium and Pro subscribers appear higher in search results and are featured on the home page. This is visibility, not trust."),
-    ("Payment security", "All payments are handled by Paystack. JobCatch never stores your card number."),
+     "Job seekers upload a CV (PDF), search open jobs, and apply with an optional cover letter. "
+     "Employers can shortlist, reject, or hire applicants."),
+    ("Booking lifecycle",
+     "A booking starts as 'pending'. The artisan can accept or cancel; the customer can also cancel. "
+     "Once accepted, the artisan can start work ('in_progress'), then complete it. "
+     "After completion, the customer can leave a review."),
+    ("Application process",
+     "Job seekers apply with a CV. Employers can shortlist, then hire, or reject. An applicant must be "
+     "shortlisted before being hired. After a hire, the employer and seeker can start an in-app chat about the role."),
+    ("Messaging",
+     "In-app chat is available between the two parties of a booking (customer and artisan) or a job "
+     "(employer and seeker). The conversation opens the first time either party starts a chat about that "
+     "booking or job; it is not created automatically."),
+    ("Verification badges",
+     "The verified mark on an artisan means they submitted a government ID and a work video that an admin "
+     "approved. Employers get a badge after their CAC certificate is approved."),
+    ("Subscription benefits",
+     "Premium and Pro subscribers appear higher in search results and are featured on the home page. "
+     "This is visibility, not trust — it does not replace verification."),
+    ("Payment security",
+     "All card payments are handled by Paystack. JobCatch never stores your card number."),
+    ("CV Service",
+     "For a one-off 5,000 naira fee, a job seeker unlocks the concierge CV Service: they submit a CV (PDF) "
+     "to the JobCatch admin, who reviews it and forwards selected CVs to employers. Employers see these under "
+     "'Referred CVs' in their dashboard."),
+    ("File uploads",
+     "Allowed file types are JPG, PNG, PDF, and MP4. Images and documents are limited to 25 MB; "
+     "artisan job videos (MP4) can be up to 100 MB."),
 ]
 
 
