@@ -10,9 +10,10 @@ def _active_tier(user):
     """Return 'premium' | 'pro' | None for a user's active paid subscription."""
     from apps.subscriptions.models import Subscription
 
+    from apps.subscriptions.models import VISIBILITY_PLANS
+
     sub = (Subscription.objects
-           .filter(user=user, is_active=True)
-           .exclude(plan="free")
+           .filter(user=user, is_active=True, plan__in=VISIBILITY_PLANS)
            .order_by("-started_at")
            .first())
     return sub.plan if sub else None
@@ -128,14 +129,23 @@ class PublicArtisanDetailSerializer(serializers.ModelSerializer):
 class PublicJobSerializer(serializers.ModelSerializer):
     category_name = serializers.CharField(source="category.name", read_only=True)
     employer_company = serializers.CharField(source="employer.company_name", read_only=True)
+    # "Verified Employer" trust badge — granted by an approved KYC.
+    employer_verified = serializers.BooleanField(source="employer.is_cac_verified", read_only=True)
+    employer_website = serializers.CharField(source="employer.website", read_only=True)
 
     employer_tier = serializers.SerializerMethodField()
+    # When the job went live to seekers (falls back to creation for old rows).
+    posted_at = serializers.SerializerMethodField()
 
     class Meta:
         model = Job
         fields = ("id", "title", "description", "category", "category_name",
-                  "employer_company", "salary_min", "salary_max",
-                  "employer_tier", "created_at")
+                  "employer_company", "employer_verified", "employer_website",
+                  "salary_min", "salary_max", "employer_tier", "is_featured",
+                  "posted_at", "expires_at", "created_at")
+
+    def get_posted_at(self, obj):
+        return (obj.published_at or obj.created_at).isoformat()
 
     def get_employer_tier(self, obj):
         return _active_tier(obj.employer.user)

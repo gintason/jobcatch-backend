@@ -46,7 +46,7 @@ def _booking(customer, artisan):
     )
 
 
-@patch("apps.payments.views.get_gateway")
+@patch("apps.payments.services.get_gateway")
 def test_initialize_booking_payment(mock_gateway, client):
     mock_gateway.return_value.initialize.return_value = {
         "authorization_url": "https://paystack.test/pay/abc", "reference": "ref"
@@ -67,7 +67,7 @@ def test_initialize_booking_payment(mock_gateway, client):
     assert payment.status == PaymentStatus.INITIATED
 
 
-@patch("apps.payments.views.get_gateway")
+@patch("apps.payments.services.get_gateway")
 def test_initialize_subscription_creates_inactive_sub(mock_gateway, client):
     mock_gateway.return_value.initialize.return_value = {
         "authorization_url": "https://paystack.test/pay/sub", "reference": "ref"

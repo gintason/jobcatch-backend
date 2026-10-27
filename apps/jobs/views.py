@@ -2,16 +2,22 @@
 Jobs & Applications API.
 
   CVs           -> job seekers manage their own (from Phase 2A)
-  Jobs          -> employers create/manage their own; anyone browses open jobs
+  Jobs          -> verified employers create/manage their own; anyone browses
+                   live jobs. With paid listings on, a new job is a draft until
+                   a listing credit is spent (POST /jobs/{id}/publish/).
   Applications  -> seekers apply & track; employers review & move the pipeline
 """
+from django.conf import settings
+from django.db.models import Q
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
+from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from apps.accounts.models import UserRole
 from apps.common.permissions import IsEmployer, IsJobSeeker
+from apps.kyc.permissions import IsVerifiedEmployer
 
 from .models import Application, ApplicationStatus, CV, Job
 from .serializers import (
@@ -38,7 +44,7 @@ class CVViewSet(viewsets.ModelViewSet):
 
 
 class JobViewSet(viewsets.ModelViewSet):
-    """Employers manage their own postings; everyone can browse open jobs."""
+    """Employers manage their own postings; everyone can browse live jobs."""
 
     def get_serializer_class(self):
         return JobWriteSerializer if self.action in ("create", "update", "partial_update") else JobSerializer
@@ -46,6 +52,8 @@ class JobViewSet(viewsets.ModelViewSet):
     def get_permissions(self):
         if self.action in ("list", "retrieve"):
             return [IsAuthenticated()]
+        if self.action in ("create", "publish", "reopen"):
+            return [IsVerifiedEmployer()]
         return [IsEmployer()]
 
     def get_queryset(self):
@@ -53,21 +61,82 @@ class JobViewSet(viewsets.ModelViewSet):
         # Write actions: restrict to the employer's own jobs.
         if self.action not in ("list", "retrieve"):
             return qs.filter(employer=self.request.user.employer_profile)
-        # ?mine=true -> the employer's own jobs (incl. closed).
 
+        # ?mine=true -> the employer's own jobs (incl. drafts, closed, expired).
         user = self.request.user
         employer_profile = getattr(user, "employer_profile", None)
         if self.request.query_params.get("mine") == "true" and employer_profile:
             return qs.filter(employer=employer_profile)
-        
-        # Public browse: open jobs, with optional ?category= and ?q= (title search).
+
+        # Public browse: live jobs, with optional ?category= and ?q=.
         category = self.request.query_params.get("category")
         q = self.request.query_params.get("q")
         if category:
             qs = qs.filter(category_id=category)
         if q:
-            qs = qs.filter(title__icontains=q)
-        return qs.filter(is_open=True)
+            qs = qs.filter(Q(title__icontains=q) | Q(description__icontains=q))
+        live = qs.live()
+        if self.action == "retrieve" and employer_profile:
+            # Owners can open their own drafts / expired jobs by id.
+            return (live | qs.filter(employer=employer_profile)).distinct()
+        return live.order_by("-is_featured", "-published_at")
+
+    def create(self, request, *args, **kwargs):
+        ser = self.get_serializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        wants_publish = ser.validated_data.get("publish", False)
+        job = ser.save()
+        payment_required = False
+        if wants_publish or not settings.PAID_JOB_LISTINGS_ENABLED:
+            from apps.listings.services import PaymentRequired, publish_job
+
+            try:
+                job = publish_job(job)
+            except PaymentRequired:
+                payment_required = True   # stays a draft; the client offers packages
+        data = JobSerializer(job).data
+        data["payment_required"] = payment_required or job.listing_status == "draft"
+        return Response(data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=["post"])
+    def publish(self, request, pk=None):
+        """Spend a listing credit. ?featured=true insists on a featured credit."""
+        from apps.listings.models import PackagePurchase
+        from apps.listings.services import publish_job
+
+        job = self.get_object()
+        purchase = None
+        purchase_id = request.data.get("purchase")
+        if purchase_id:
+            purchase = PackagePurchase.objects.filter(
+                pk=purchase_id, employer=job.employer).first()
+            if not purchase:
+                raise ValidationError({"purchase": "Package not found."})
+        featured = request.data.get("featured")
+        featured = None if featured in (None, "") else str(featured).lower() == "true"
+        job = publish_job(job, purchase=purchase, featured=featured)
+        return Response(JobSerializer(job).data)
+
+    @action(detail=True, methods=["post"])
+    def close(self, request, pk=None):
+        job = self.get_object()
+        if job.is_open:
+            job.is_open = False
+            job.save(update_fields=["is_open", "updated_at"])
+        return Response(JobSerializer(job).data)
+
+    @action(detail=True, methods=["post"])
+    def reopen(self, request, pk=None):
+        """Reopen a closed job still inside its paid period (no new credit)."""
+        from apps.listings.services import reopen_check
+
+        job = self.get_object()
+        if not reopen_check(job):
+            raise ValidationError({"detail": "This listing has expired — publish it again.",
+                                   "code": "expired"})
+        job.is_open = True
+        job.save(update_fields=["is_open", "updated_at"])
+        return Response(JobSerializer(job).data)
 
     @action(detail=True, methods=["get"], permission_classes=[IsEmployer])
     def applications(self, request, pk=None):
@@ -99,7 +168,6 @@ class ApplicationViewSet(viewsets.ModelViewSet):
         # Paired roles: a supply-side user (artisan/job_seeker) tracks their own
         # applications; a demand-side user (customer/employer) sees applicants to
         # their own jobs. Every user now has both profiles, so scope by profile.
-        from django.db.models import Q
         conditions = Q()
         if getattr(user, "job_seeker_profile", None):
             conditions |= Q(seeker__user=user)
@@ -108,7 +176,6 @@ class ApplicationViewSet(viewsets.ModelViewSet):
         if not conditions:
             return qs.none()
         return qs.filter(conditions)
-    
 
     def list(self, request, *args, **kwargs):
         qs = self.get_queryset()

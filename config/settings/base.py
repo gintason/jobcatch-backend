@@ -59,6 +59,10 @@ LOCAL_APPS = [
     "apps.verification",
     "apps.matching",
     "apps.ai",
+    "apps.kyc",
+    "apps.listings",
+    "apps.billing",
+    "apps.engagement",
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
@@ -214,6 +218,72 @@ CV_SERVICE_PRICE = 5000  # Naira, one-off concierge CV service
 PAYMENT_CALLBACK_URL = env(
     "PAYMENT_CALLBACK_URL", default="https://jobcatchonline.com/payments/callback"
 )
+# Public site, used for links in emails / WhatsApp alerts.
+FRONTEND_URL = env("FRONTEND_URL", default="https://jobcatchonline.com").rstrip("/")
+
+# Which gateway a checkout uses when the client doesn't ask for one.
+DEFAULT_PAYMENT_GATEWAY = env("DEFAULT_PAYMENT_GATEWAY", default="paystack")
+# Flutterwave signs webhooks by echoing this "secret hash" (set in the FLW dashboard).
+FLUTTERWAVE_WEBHOOK_HASH = env("FLUTTERWAVE_WEBHOOK_HASH", default="")
+
+# --- Paid job listings ---
+# When True, a job only goes live once a listing credit (bought package) is spent.
+PAID_JOB_LISTINGS_ENABLED = env.bool("PAID_JOB_LISTINGS_ENABLED", default=True)
+
+# --- Employer KYC ---
+# Unverified employers cannot post jobs while this is True.
+KYC_REQUIRED_TO_POST_JOBS = env.bool("KYC_REQUIRED_TO_POST_JOBS", default=True)
+# Auto-verify when every automated check passes; otherwise an admin decides.
+KYC_AUTO_APPROVE = env.bool("KYC_AUTO_APPROVE", default=False)
+# "dojah" for live CAC/TIN/NIN lookups; "manual" skips lookups (admin reviews docs).
+KYC_PROVIDER = env("KYC_PROVIDER", default="manual")
+DOJAH_BASE_URL = env("DOJAH_BASE_URL", default="https://api.dojah.io")
+DOJAH_APP_ID = env("DOJAH_APP_ID", default="")
+DOJAH_SECRET_KEY = env("DOJAH_SECRET_KEY", default="")
+# Paths are configurable so a provider API revision doesn't need a code deploy.
+DOJAH_CAC_PATH = env("DOJAH_CAC_PATH", default="/api/v1/kyc/cac/basic")
+DOJAH_TIN_PATH = env("DOJAH_TIN_PATH", default="/api/v1/kyc/tin")
+DOJAH_NIN_PATH = env("DOJAH_NIN_PATH", default="/api/v1/kyc/nin")
+KYC_OTP_TTL_MINUTES = 10
+
+# --- SMS (phone OTP) ---
+# "termii" sends real SMS; "console" logs the code (development only).
+SMS_BACKEND = env("SMS_BACKEND", default="console")
+TERMII_API_KEY = env("TERMII_API_KEY", default="")
+TERMII_SENDER_ID = env("TERMII_SENDER_ID", default="JobCatch")
+TERMII_BASE_URL = env("TERMII_BASE_URL", default="https://api.ng.termii.com")
+TERMII_CHANNEL = env("TERMII_CHANNEL", default="dnd")  # dnd reaches DND numbers
+
+# --- Artisan verification + upgrades ---
+ARTISAN_VERIFICATION_FEE = Decimal(env("ARTISAN_VERIFICATION_FEE", default="5000"))
+
+# --- Job seeker Pro plan ---
+SEEKER_PRO_PRICE = Decimal(env("SEEKER_PRO_PRICE", default="3000"))
+SEEKER_PRO_PERIOD_DAYS = env.int("SEEKER_PRO_PERIOD_DAYS", default=30)
+
+# --- WhatsApp job alerts (Meta WhatsApp Cloud API) ---
+# "cloud_api" sends; "console" logs. Business-initiated messages must use an
+# approved template whose body takes {{1}} title, {{2}} company, {{3}} link.
+WHATSAPP_BACKEND = env("WHATSAPP_BACKEND", default="console")
+WHATSAPP_TOKEN = env("WHATSAPP_TOKEN", default="")
+WHATSAPP_PHONE_NUMBER_ID = env("WHATSAPP_PHONE_NUMBER_ID", default="")
+WHATSAPP_JOB_ALERT_TEMPLATE = env("WHATSAPP_JOB_ALERT_TEMPLATE", default="job_alert")
+WHATSAPP_TEMPLATE_LANG = env("WHATSAPP_TEMPLATE_LANG", default="en")
+
+# --- Bill payments (VTU.ng v2) ---
+VTU_BASE_URL = env("VTU_BASE_URL", default="https://vtu.ng/wp-json")
+VTU_USERNAME = env("VTU_USERNAME", default="")
+VTU_PASSWORD = env("VTU_PASSWORD", default="")
+VTU_USER_PIN = env("VTU_USER_PIN", default="")      # signs VTU.ng webhooks
+# Flat convenience fee (Naira) added per bill type; 0 = charge face value only.
+BILL_SERVICE_FEES = {
+    "airtime": Decimal(env("BILL_FEE_AIRTIME", default="0")),
+    "data": Decimal(env("BILL_FEE_DATA", default="0")),
+    "electricity": Decimal(env("BILL_FEE_ELECTRICITY", default="0")),
+    "tv": Decimal(env("BILL_FEE_TV", default="0")),
+}
+WALLET_MIN_TOPUP = Decimal("100")
+WALLET_MAX_TOPUP = Decimal("500000")
 
 # --- Geo-matching engine ---
 MATCHING_DEFAULT_RADIUS_KM = 25
@@ -242,6 +312,9 @@ STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
+# KYC / verification documents. Never served by the public /media/ route —
+# only through permission-checked download endpoints (apps.common.storage).
+PRIVATE_MEDIA_ROOT = env("PRIVATE_MEDIA_ROOT", default=str(BASE_DIR / "private_media"))
 
 # App-specific knobs
 OTP_TTL_MINUTES = 10

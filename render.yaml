@@ -76,7 +76,90 @@ services:
         sync: false
       - key: PAYMENT_CALLBACK_URL
         sync: false
+      # --- Phase 2 (see PHASE5_SETUP.md) ---
+      - key: FLUTTERWAVE_SECRET_KEY
+        sync: false
+      - key: FLUTTERWAVE_WEBHOOK_HASH
+        sync: false
+      - key: DEFAULT_PAYMENT_GATEWAY
+        value: paystack
+      - key: FRONTEND_URL
+        value: https://jobcatchonline.com
+      - key: PAID_JOB_LISTINGS_ENABLED
+        value: "True"
+      - key: KYC_REQUIRED_TO_POST_JOBS
+        value: "True"
+      - key: KYC_AUTO_APPROVE
+        value: "False"
+      - key: KYC_PROVIDER
+        value: manual
+      - key: DOJAH_APP_ID
+        sync: false
+      - key: DOJAH_SECRET_KEY
+        sync: false
+      - key: SMS_BACKEND
+        value: termii
+      - key: TERMII_API_KEY
+        sync: false
+      - key: TERMII_SENDER_ID
+        sync: false
+      - key: WHATSAPP_BACKEND
+        value: console
+      - key: WHATSAPP_TOKEN
+        sync: false
+      - key: WHATSAPP_PHONE_NUMBER_ID
+        sync: false
+      - key: VTU_USERNAME
+        sync: false
+      - key: VTU_PASSWORD
+        sync: false
+      - key: VTU_USER_PIN
+        sync: false
       - key: LLM_PROVIDER
         sync: false
       - key: LLM_API_KEY
+        sync: false
+
+  # --- Scheduled housekeeping: listing/plan expiry, payment reconciliation,
+  # bill requery + refunds, renewal reminders, upgrade nudges. Every 15 min.
+  # Render cron jobs can't mount the web service's disk, which is fine: no
+  # step here touches uploaded files. Copy the web service's env vars
+  # (DATABASE_URL, SECRET_KEY, gateway + VTU keys) into this job too.
+  - type: cron
+    name: jobcatch-scheduler
+    runtime: python
+    schedule: "*/15 * * * *"
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "python manage.py run_scheduled_tasks"
+    envVars:
+      - key: DJANGO_SETTINGS_MODULE
+        value: config.settings.production
+      - key: PYTHON_VERSION
+        value: "3.12.5"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: jobcatch-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: jobcatch-redis
+          property: connectionString
+      - key: SECRET_KEY
+        sync: false
+      - key: PAYSTACK_SECRET_KEY
+        sync: false
+      - key: FLUTTERWAVE_SECRET_KEY
+        sync: false
+      - key: VTU_USERNAME
+        sync: false
+      - key: VTU_PASSWORD
+        sync: false
+      - key: EMAIL_HOST
+        sync: false
+      - key: EMAIL_HOST_USER
+        sync: false
+      - key: EMAIL_HOST_PASSWORD
+        sync: false
+      - key: DEFAULT_FROM_EMAIL
         sync: false

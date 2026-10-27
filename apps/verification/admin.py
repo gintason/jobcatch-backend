@@ -6,9 +6,19 @@ submitted document, decides, and the badge propagates via the approval signal.
 Without this screen, no one could ever be verified.
 """
 from django.contrib import admin, messages
-from django.utils.html import format_html
+from django.urls import reverse
+from django.utils.html import format_html, format_html_join
 
-from .models import Verification, VerificationStatus
+from apps.common.audit import history
+
+from .models import (
+    ArtisanVerificationApplication,
+    ArtisanVerificationDocument,
+    ArtisanVerificationStatus,
+    Verification,
+    VerificationStatus,
+)
+from .services import review_application
 
 
 @admin.register(Verification)
@@ -74,3 +84,57 @@ class VerificationAdmin(admin.ModelAdmin):
         if change and "status" in form.changed_data:
             obj.reviewed_by = request.user
         super().save_model(request, obj, form, change)
+
+
+# ---------------------------------------------------------------- paid artisan verification
+class ArtisanVerificationDocumentInline(admin.TabularInline):
+    model = ArtisanVerificationDocument
+    extra = 0
+    can_delete = False
+    fields = ("doc_type", "open_link", "original_name", "created_at")
+    readonly_fields = fields
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+    @admin.display(description="File")
+    def open_link(self, obj):
+        return format_html('<a href="{}" target="_blank" rel="noreferrer">Open &nearr;</a>',
+                           reverse("artisan-document-download", args=[obj.pk]))
+
+
+@admin.register(ArtisanVerificationApplication)
+class ArtisanVerificationApplicationAdmin(admin.ModelAdmin):
+    list_display = ("artisan", "status", "fee_paid_at", "years_experience", "id_type",
+                    "submitted_at", "reviewed_by")
+    list_filter = ("status", "id_type", "submitted_at")
+    search_fields = ("artisan__user__email", "artisan__user__full_name", "id_number")
+    ordering = ("status", "submitted_at")
+    inlines = (ArtisanVerificationDocumentInline,)
+    readonly_fields = ("artisan", "status", "categories", "years_experience", "id_type",
+                       "id_number", "trade_credentials", "fee_amount", "fee_paid_at", "payment",
+                       "submitted_at", "reviewed_at", "reviewed_by", "review_note",
+                       "audit_history")
+    actions = ("approve_selected",)
+
+    @admin.display(description="History")
+    def audit_history(self, obj):
+        rows = [(e.created_at.strftime("%Y-%m-%d %H:%M"), e.action,
+                 e.actor.email if e.actor else "system") for e in history(obj)]
+        if not rows:
+            return "—"
+        return format_html("<table>{}</table>", format_html_join(
+            "", "<tr><td>{}</td><td>{}</td><td>{}</td></tr>", rows))
+
+    @admin.action(description="✓ Approve selected (grants Verified Artisan badge)")
+    def approve_selected(self, request, queryset):
+        n = 0
+        for app in queryset.filter(status=ArtisanVerificationStatus.PENDING_REVIEW):
+            review_application(app, admin=request.user, approve=True,
+                               note="Approved from Django admin", request=request)
+            n += 1
+        self.message_user(request, f"Approved {n} application(s). Reject with a reason from "
+                                   f"/admin/reviews in the web app.", messages.SUCCESS)
+
+    def has_add_permission(self, request):
+        return False

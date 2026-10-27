@@ -44,13 +44,42 @@ def _cv(seeker, title="My CV"):
 
 
 # ---------------------------------------------------------------- jobs
-def test_employer_creates_job(client, employer):
+def _verify(user):
+    profile = user.employer_profile
+    profile.is_cac_verified = True
+    profile.save(update_fields=["is_cac_verified"])
+
+
+def test_unverified_employer_cannot_post(client, employer):
+    client.force_authenticate(employer)
+    resp = client.post("/api/v1/jobs/", {"title": "Plumber", "description": "Full time"},
+                       format="json")
+    assert resp.status_code == 403
+    assert resp.json()["code"] == "kyc_required"
+
+
+def test_verified_employer_creates_draft_job(client, employer):
+    """With paid listings on, a new job is a draft until a credit is spent."""
+    _verify(employer)
     client.force_authenticate(employer)
     resp = client.post("/api/v1/jobs/", {
         "title": "Plumber wanted", "description": "Full time", "salary_min": "80000",
     }, format="json")
     assert resp.status_code == 201
+    assert resp.json()["listing_status"] == "draft"
+    assert resp.json()["payment_required"] is True
     assert Job.objects.filter(employer=employer.employer_profile).count() == 1
+    assert Job.objects.live().count() == 0
+
+
+def test_description_formatting_preserved(client, employer):
+    _verify(employer)
+    client.force_authenticate(employer)
+    text = "  Intro line\r\n\r\nResponsibilities:\r\n  - Fix pipes\r\n  - Install sinks\r\n\r\n"
+    resp = client.post("/api/v1/jobs/", {"title": "T", "description": text}, format="json")
+    assert resp.status_code == 201
+    stored = Job.objects.get(pk=resp.json()["id"]).description
+    assert stored == "  Intro line\n\nResponsibilities:\n  - Fix pipes\n  - Install sinks"
 
 
 def test_non_employer_cannot_create_job(client, seeker):

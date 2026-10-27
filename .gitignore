@@ -7,3 +7,6 @@ media/
 .pytest_cache/
 .venv/
 *.zip
+
+# Private KYC / verification documents (never commit)
+private_media/

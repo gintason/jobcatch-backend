@@ -28,7 +28,8 @@ from rest_framework.views import APIView
 from apps.accounts.models import ArtisanProfile
 from apps.catalog.models import Category, CategoryKind
 from apps.jobs.models import Job
-from apps.subscriptions.models import Subscription
+from apps.common.pagination import DefaultPagination
+from apps.subscriptions.models import VISIBILITY_PLANS, Subscription
 
 from .serializers import (
     PublicArtisanDetailSerializer,
@@ -51,7 +52,7 @@ def _tier_case():
 def _active_plan_for(outer_field):
     """Subquery: the given user's active subscription plan (latest first)."""
     return Subscription.objects.filter(
-        user=OuterRef(outer_field), is_active=True
+        user=OuterRef(outer_field), is_active=True, plan__in=VISIBILITY_PLANS
     ).order_by("-started_at").values("plan")[:1]
 
 
@@ -86,6 +87,11 @@ ARTISAN_ORDERING = (
 )
 
 
+# Featured (paid "Featured Post") listings first, then employer tier, then
+# verified employers, then newest.
+JOB_ORDERING = ("-is_featured", "tier", "-employer__is_cac_verified", "-published_at")
+
+
 class PublicCategoryList(ListAPIView):
     permission_classes = [AllowAny]
     serializer_class = PublicCategorySerializer
@@ -111,11 +117,24 @@ class FeaturedArtisanList(ListAPIView):
         return _real_artisans().order_by(*ARTISAN_ORDERING)[:8]
 
 
+class ArtisanBrowsePagination(DefaultPagination):
+    """
+    60 artisans per page (was the global 20). Listings are tier-ranked, so with
+    20 slots Premium/Pro artisans filled a category's first page and artisans
+    without a badge were never seen. 60 gives both a fair share of the page;
+    the client loads further pages with "Load more".
+    """
+
+    page_size = 60
+    max_page_size = 60
+
+
 class ArtisanBrowseList(ListAPIView):
-    """Search + filter artisans (paginated). ?q= and ?category=<slug|name>."""
+    """Search + filter artisans (paginated, 60/page). ?q= and ?category=<slug|name>."""
 
     permission_classes = [AllowAny]
     serializer_class = PublicArtisanSerializer
+    pagination_class = ArtisanBrowsePagination
 
     def get_queryset(self):
         qs = _real_artisans()
@@ -162,11 +181,11 @@ class FeaturedJobList(ListAPIView):
 
     def get_queryset(self):
         return (
-            Job.objects.filter(is_open=True)
+            Job.objects.live()
             .select_related("employer__user", "category")
             .annotate(plan=Subquery(_active_plan_for("employer__user")))
             .annotate(tier=_tier_case())
-            .order_by("tier", "-created_at")[:6]
+            .order_by(*JOB_ORDERING)[:6]
         )
 
 
@@ -177,7 +196,7 @@ class PublicJobBrowse(ListAPIView):
     serializer_class = PublicJobSerializer
 
     def get_queryset(self):
-        qs = (Job.objects.filter(is_open=True)
+        qs = (Job.objects.live()
               .select_related("employer__user", "category")
               .annotate(plan=Subquery(_active_plan_for("employer__user")))
               .annotate(tier=_tier_case()))
@@ -187,7 +206,18 @@ class PublicJobBrowse(ListAPIView):
             qs = qs.filter(Q(category__slug=category) | Q(category__name__iexact=category))
         if q:
             qs = qs.filter(Q(title__icontains=q) | Q(description__icontains=q))
-        return qs.order_by("tier", "-created_at")
+        return qs.order_by(*JOB_ORDERING)
+
+
+class PublicJobDetail(RetrieveAPIView):
+    """One live job, with the full (formatted) description — /jobs/:id on the web."""
+
+    permission_classes = [AllowAny]
+    serializer_class = PublicJobSerializer
+    lookup_field = "id"
+
+    def get_queryset(self):
+        return Job.objects.live().select_related("employer__user", "category")
 
 
 class PublicStats(APIView):

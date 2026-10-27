@@ -110,11 +110,28 @@ def _ensure_hire_conversation(application):
 def on_payment(sender, instance, created, **kwargs):
     old = getattr(instance, "_old_status", None)
     if instance.status == PaymentStatus.SUCCESS and old != PaymentStatus.SUCCESS:
+        what = f" for {instance.description}" if instance.description else ""
+        invoice = f" Invoice {instance.invoice_number}." if instance.invoice_number else ""
         notify(
             instance.payer,
             kind="payment_alert",
             title="Payment successful",
-            body=f"Your payment of NGN {instance.amount} was received.",
+            body=(f"Your payment of NGN {instance.amount:,.2f}{what} was received.{invoice} "
+                  f"View your receipt in your JobCatch dashboard."),
+            data={"payment_id": str(instance.id), "reference": instance.reference,
+                  "invoice_number": instance.invoice_number,
+                  "url": f"/receipts/{instance.reference}"},
+        )
+    elif (instance.status == PaymentStatus.FAILED and old == PaymentStatus.INITIATED
+          # Silent: a checkout that never opened (already shown as an error) or
+          # one the user simply walked away from.
+          and not any(s in instance.failure_reason for s in ("at checkout", "abandoned"))):
+        notify(
+            instance.payer,
+            kind="payment_alert",
+            title="Payment not completed",
+            body=f"Your payment of NGN {instance.amount:,.2f} could not be confirmed. "
+                 f"No value was delivered; please try again.",
             data={"payment_id": str(instance.id), "reference": instance.reference},
         )
 

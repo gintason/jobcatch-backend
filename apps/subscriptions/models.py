@@ -9,6 +9,12 @@ class Plan(models.TextChoices):
     FREE = "free", "Free"
     PREMIUM = "premium", "Premium"
     PRO = "pro", "Pro"
+    # Job seeker Pro (₦3,000/month): instant WhatsApp job alerts + priority.
+    SEEKER_PRO = "seeker_pro", "Job seeker Pro"
+
+
+# Plans that buy listing visibility (artisans / employers). Seeker Pro doesn't.
+VISIBILITY_PLANS = (Plan.PREMIUM, Plan.PRO)
 
 
 class Subscription(BaseModel):

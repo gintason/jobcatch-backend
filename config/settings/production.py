@@ -1,4 +1,6 @@
 """Production settings — hardened for Render deployment."""
+from pathlib import Path
+
 from .base import *  # noqa
 
 DEBUG = False
@@ -65,6 +67,13 @@ else:
     # disk mounted there, every deploy wipes the files.
     MEDIA_ROOT = env("RENDER_DISK_PATH", default=str(BASE_DIR / "media"))  # noqa
     SERVE_MEDIA = True
+
+# KYC documents sit on the same persistent disk under "_private/", which the
+# public media route refuses to serve (see apps.common.media.serve_public_media).
+PRIVATE_MEDIA_ROOT = env(  # noqa
+    "PRIVATE_MEDIA_ROOT",
+    default=str(Path(env("RENDER_DISK_PATH", default=str(BASE_DIR / "media"))) / "_private"),  # noqa
+)
 
 # --- Logging: surface errors in Render's log stream ---
 LOGGING = {

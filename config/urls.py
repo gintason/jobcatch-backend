@@ -2,10 +2,10 @@
 from django.conf import settings
 from django.contrib import admin
 from django.urls import include, path, re_path
-from django.views.static import serve
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 
 from apps.common.health import healthz
+from apps.common.media import serve_public_media
 
 urlpatterns = [
     # Unthrottled liveness probe — see apps/common/health.py.
@@ -29,6 +29,10 @@ urlpatterns = [
     path("api/v1/", include("apps.ai.urls")),              # AI chatbot (RAG + tools)
     path("api/v1/", include("apps.public.urls")),          # public home-page data (no auth)
     path("api/v1/", include("apps.cvservice.urls")),      # paid CV service
+    path("api/v1/", include("apps.kyc.urls")),            # employer KYC
+    path("api/v1/", include("apps.listings.urls")),       # paid job listing packages
+    path("api/v1/", include("apps.billing.urls")),        # wallet + bill payments (VTU)
+    path("api/v1/", include("apps.engagement.urls")),     # upgrade prompts, seeker Pro, job alerts
 
     # --- OpenAPI schema + docs ---
     path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
@@ -44,9 +48,6 @@ urlpatterns = [
 # SERVE_MEDIA=False and S3 serves the files instead.
 if settings.DEBUG or getattr(settings, "SERVE_MEDIA", False):
     urlpatterns += [
-        re_path(
-            r"^media/(?P<path>.*)$",
-            serve,
-            {"document_root": settings.MEDIA_ROOT},
-        ),
+        # Refuses anything under MEDIA_ROOT/_private (KYC documents).
+        re_path(r"^media/(?P<path>.*)$", serve_public_media),
     ]

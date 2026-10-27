@@ -47,8 +47,19 @@ class _ArtisanOwnedViewSet(viewsets.ModelViewSet):
 
 
 class ArtisanPortfolioViewSet(_ArtisanOwnedViewSet):
+    """
+    Artisans add and remove their work photos. DELETE removes the stored image
+    as well as the row, so a removed picture is really gone (not just unlisted).
+    """
+
     queryset = ArtisanPortfolioItem.objects.all()
     serializer_class = ArtisanPortfolioItemSerializer
+
+    def perform_destroy(self, instance):
+        image = instance.image
+        instance.delete()
+        if image:
+            image.delete(save=False)
 
 
 class ArtisanJobVideoViewSet(_ArtisanOwnedViewSet):
