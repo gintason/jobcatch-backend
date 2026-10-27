@@ -23,6 +23,7 @@ from django.utils import timezone
 from rest_framework.exceptions import ValidationError
 
 from apps.common.phone import InvalidPhone, to_local
+from apps.payments.gateways import get_gateway
 from apps.payments.models import PaymentPurpose
 from apps.payments.services import start_checkout
 
@@ -48,6 +49,13 @@ DISCOS = {
 }
 TV_PROVIDERS = {"dstv": "DStv", "gotv": "GOtv", "startimes": "StarTimes", "showmax": "Showmax"}
 METER_TYPES = ("prepaid", "postpaid")
+EPIN_VALUES = (100, 200, 500)
+EPIN_MAX_QUANTITY = 40
+# VTU.ng betting service_ids are case-sensitive.
+BETTING_PROVIDERS = {k: k for k in (
+    "1xBet", "BangBet", "Bet9ja", "BetKing", "BetLand", "BetLion", "BetWay", "CloudBet",
+    "LiveScoreBet", "MerryBet", "NaijaBet", "NairaBet", "SportyBet", "SupaBet")}
+BETTING_MIN, BETTING_MAX = Decimal("100"), Decimal("100000")
 
 AIRTIME_MIN = {"mtn": Decimal("10")}
 AIRTIME_DEFAULT_MIN, AIRTIME_MAX = Decimal("50"), Decimal("50000")
@@ -63,7 +71,13 @@ def catalogue():
         "data": [{"id": k, "name": v} for k, v in DATA_NETWORKS.items()],
         "electricity": [{"id": k, "name": v} for k, v in DISCOS.items()],
         "tv": [{"id": k, "name": v} for k, v in TV_PROVIDERS.items()],
+        "epins": [{"id": k, "name": v} for k, v in NETWORKS.items()],
+        "betting": ([{"id": k, "name": v} for k, v in BETTING_PROVIDERS.items()]
+                    if settings.BILL_BETTING_ENABLED else []),
+        "betting_enabled": settings.BILL_BETTING_ENABLED,
         "meter_types": list(METER_TYPES),
+        "epin_values": list(EPIN_VALUES),
+        "epin_max_quantity": EPIN_MAX_QUANTITY,
         "fees": {k: str(v) for k, v in settings.BILL_SERVICE_FEES.items()},
     }
 
@@ -109,14 +123,27 @@ def credit_wallet_from_payment(payment):
           reference=f"topup:{payment.reference}", description="Wallet top-up", payment=payment)
 
 
-def start_wallet_topup(*, user, amount, gateway=None):
+def billing_gateway():
+    """
+    Bills and wallet top-ups are always collected through BILLING_GATEWAY
+    (Flutterwave by default), never the client's choice.
+    """
+    name = settings.BILLING_GATEWAY
+    if not get_gateway(name).is_configured():
+        raise ValidationError({"detail": "Card payments for bills are temporarily unavailable. "
+                                         "Please pay from your wallet or try again later.",
+                               "code": "billing_gateway_unavailable"})
+    return name
+
+
+def start_wallet_topup(*, user, amount):
     amount = Decimal(amount)
     if not (settings.WALLET_MIN_TOPUP <= amount <= settings.WALLET_MAX_TOPUP):
         raise ValidationError({"amount": f"Top up between ₦{settings.WALLET_MIN_TOPUP:,.0f} and "
                                          f"₦{settings.WALLET_MAX_TOPUP:,.0f}."})
     wallet_for(user)
     return start_checkout(user=user, purpose=PaymentPurpose.WALLET_TOPUP, amount=amount,
-                          description=f"Wallet top-up ₦{amount:,.2f}", gateway=gateway)
+                          description=f"Wallet top-up ₦{amount:,.2f}", gateway=billing_gateway())
 
 
 # ------------------------------------------------------------------ quoting
@@ -211,8 +238,38 @@ def build_order_fields(data):
                       variation_label=f"{TV_PROVIDERS[provider]} {plan.get('package_bouquet', '')}"[:120],
                       subscription_type=sub_type if provider in ("dstv", "gotv") else "",
                       amount=amount)
+    elif service == BillService.EPINS:
+        if provider not in NETWORKS:
+            raise ValidationError({"provider": "Choose a network."})
+        try:
+            value = int(Decimal(str(data.get("variation_id") or data.get("value") or 0)))
+            quantity = int(data.get("quantity") or 1)
+        except Exception as exc:  # noqa: BLE001
+            raise ValidationError({"variation_id": "Choose a PIN value."}) from exc
+        if value not in EPIN_VALUES:
+            raise ValidationError({"variation_id": "PINs come in ₦100, ₦200 or ₦500."})
+        if not (1 <= quantity <= EPIN_MAX_QUANTITY):
+            raise ValidationError({"quantity": f"Buy between 1 and {EPIN_MAX_QUANTITY} PINs."})
+        fields.update(customer_id="", variation_id=str(value), quantity=quantity,
+                      amount=Decimal(value * quantity),
+                      variation_label=f"{NETWORKS[provider]} ₦{value} PIN × {quantity}")
+
+    elif service == BillService.BETTING:
+        if not settings.BILL_BETTING_ENABLED:
+            raise ValidationError({"service": "Betting wallet funding is not available."})
+        if provider not in BETTING_PROVIDERS:
+            raise ValidationError({"provider": "Choose your betting company."})
+        if not re.fullmatch(r"[\w.@-]{3,40}", customer_id):
+            raise ValidationError({"customer_id": "Enter your betting account ID."})
+        amount = _money(data.get("amount"))
+        if not (BETTING_MIN <= amount <= BETTING_MAX) or amount != amount.to_integral_value():
+            raise ValidationError({"amount": f"Enter a whole amount between ₦{BETTING_MIN:,.0f} "
+                                             f"and ₦{BETTING_MAX:,.0f}."})
+        fields.update(customer_id=customer_id, amount=amount,
+                      variation_label=f"{provider} wallet funding",
+                      customer_name=(data.get("customer_name") or "")[:150])
     else:
-        raise ValidationError({"service": "Choose airtime, data, electricity or tv."})
+        raise ValidationError({"service": "Choose airtime, data, electricity, tv, epins or betting."})
 
     fields["fee"] = settings.BILL_SERVICE_FEES.get(service, Decimal("0"))
     fields["total"] = fields["amount"] + fields["fee"]
@@ -224,6 +281,9 @@ def verify_customer(*, service, provider, customer_id, meter_type=None):
         raise ValidationError({"provider": "Choose your electricity company."})
     if service == BillService.TV and provider not in TV_PROVIDERS:
         raise ValidationError({"provider": "Choose your TV provider."})
+    if service == BillService.BETTING and (
+            not settings.BILL_BETTING_ENABLED or provider not in BETTING_PROVIDERS):
+        raise ValidationError({"provider": "Choose your betting company."})
     try:
         return VTUClient().verify_customer(
             customer_id=re.sub(r"\s", "", customer_id), service_id=provider,
@@ -239,7 +299,7 @@ def new_request_id():
     return f"JCB{timezone.now():%y%m%d}{uuid4().hex[:16]}"   # 25 chars (VTU max 50)
 
 
-def create_order(*, user, data, payment_method, gateway=None):
+def create_order(*, user, data, payment_method):
     """Returns (order, authorization_url|None)."""
     fields = build_order_fields(data)
     if payment_method not in PaymentMethod.values:
@@ -258,6 +318,7 @@ def create_order(*, user, data, payment_method, gateway=None):
         order.refresh_from_db()
         return order, None
 
+    gateway = billing_gateway()
     holder = {}
 
     def link(payment):
@@ -311,6 +372,12 @@ def dispatch_order(order):
                                             customer_id=order.customer_id,
                                             service_id=order.provider,
                                             variation_id=order.variation_id, amount=order.amount)
+        elif order.service == BillService.EPINS:
+            result = client.buy_epins(request_id=order.request_id, service_id=order.provider,
+                                      value=order.variation_id, quantity=order.quantity)
+        elif order.service == BillService.BETTING:
+            result = client.buy_betting(request_id=order.request_id, customer_id=order.customer_id,
+                                        service_id=order.provider, amount=order.amount)
         else:
             renew = order.subscription_type == "renew"
             result = client.buy_tv(request_id=order.request_id, customer_id=order.customer_id,
@@ -348,9 +415,18 @@ def apply_biller_status(order, data, *, source):
         order.customer_name = (data.get("customer_name") or order.customer_name or "")[:150]
         order.token = str(data.get("token") or order.token or "")[:120]
         order.units = str(data.get("units") or order.units or "")[:40]
+        if isinstance(data.get("epins"), list) and data["epins"]:
+            order.epins = [
+                {"pin": str(e.get("pin", "")), "serial": str(e.get("serial") or e.get("serial_number") or ""),
+                 "amount": str(e.get("amount") or e.get("Amount") or ""),
+                 "instruction": str(e.get("instruction", ""))}
+                for e in data["epins"]
+            ]
+            # Never keep the PINs a second time inside the raw biller payload.
+            data = {k: v for k, v in data.items() if k != "epins"}
         order.response = {**(order.response or {}), source: data}
         fields = ["provider_status", "provider_order_id", "customer_name", "token", "units",
-                  "response", "updated_at"]
+                  "epins", "response", "updated_at"]
         if provider_status in SUCCESS_STATUSES:
             order.status = BillStatus.SUCCESSFUL
             order.completed_at = timezone.now()
@@ -424,13 +500,15 @@ def _notify_order(order):
     from apps.notifications.services import notify
 
     if order.status == BillStatus.SUCCESSFUL:
-        extra = f" Token: {order.token}." if order.token else ""
+        extra = (f" Token: {order.token}." if order.token
+                 else " Your PINs are on the receipt in your JobCatch account." if order.epins else "")
         notify(order.user, kind="bill_alert", title=f"{order.get_service_display()} successful",
-               body=f"₦{order.amount:,.0f} {order.variation_label} for {order.customer_id} "
-                    f"was delivered.{extra}",
+               body=f"₦{order.amount:,.0f} {order.variation_label}"
+                    f"{f' for {order.customer_id}' if order.customer_id else ''} was delivered.{extra}",
                data={"bill_order_id": str(order.id), "url": f"/bills/receipt/{order.id}"})
     elif order.status == BillStatus.REFUNDED:
         notify(order.user, kind="bill_alert", title=f"{order.get_service_display()} failed — refunded",
-               body=f"We couldn't complete your {order.variation_label} purchase for "
-                    f"{order.customer_id}. ₦{order.total:,.2f} was returned to your wallet.",
+               body=f"We couldn't complete your {order.variation_label} purchase"
+                    f"{f' for {order.customer_id}' if order.customer_id else ''}. "
+                    f"₦{order.total:,.2f} was returned to your wallet.",
                data={"bill_order_id": str(order.id), "url": f"/bills/receipt/{order.id}"})

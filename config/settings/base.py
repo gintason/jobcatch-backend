@@ -223,6 +223,9 @@ FRONTEND_URL = env("FRONTEND_URL", default="https://jobcatchonline.com").rstrip(
 
 # Which gateway a checkout uses when the client doesn't ask for one.
 DEFAULT_PAYMENT_GATEWAY = env("DEFAULT_PAYMENT_GATEWAY", default="paystack")
+# Bill payments and wallet top-ups always use this gateway, whatever the
+# client asks for. Everything else (plans, listings, fees) uses the default.
+BILLING_GATEWAY = env("BILLING_GATEWAY", default="flutterwave")
 # Flutterwave signs webhooks by echoing this "secret hash" (set in the FLW dashboard).
 FLUTTERWAVE_WEBHOOK_HASH = env("FLUTTERWAVE_WEBHOOK_HASH", default="")
 
@@ -281,7 +284,12 @@ BILL_SERVICE_FEES = {
     "data": Decimal(env("BILL_FEE_DATA", default="0")),
     "electricity": Decimal(env("BILL_FEE_ELECTRICITY", default="0")),
     "tv": Decimal(env("BILL_FEE_TV", default="0")),
+    "epins": Decimal(env("BILL_FEE_EPINS", default="0")),
+    "betting": Decimal(env("BILL_FEE_BETTING", default="0")),
 }
+# Betting-wallet funding can be switched off without a deploy (e.g. if a
+# payment provider's terms don't allow it).
+BILL_BETTING_ENABLED = env.bool("BILL_BETTING_ENABLED", default=True)
 WALLET_MIN_TOPUP = Decimal("100")
 WALLET_MAX_TOPUP = Decimal("500000")
 

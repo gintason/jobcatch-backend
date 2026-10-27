@@ -9,6 +9,8 @@ Bill payments & wallet.
   POST /billing/orders/<id>/requery/        -> refresh a processing order
   GET  /billing/wallet/                     -> balance + ledger
   POST /billing/wallet/fund/                -> top up by card/bank transfer
+  (card payments for bills and top-ups always go through BILLING_GATEWAY,
+   Flutterwave by default)
   POST /billing/webhook/vtu/                -> VTU.ng status webhook (HMAC-SHA256 with PIN)
 """
 import hashlib
@@ -46,7 +48,7 @@ class CatalogueView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request):
-        return Response(services.catalogue())
+        return Response({**services.catalogue(), "gateway": settings.BILLING_GATEWAY})
 
 
 class VariationsView(APIView):
@@ -78,7 +80,8 @@ class VerifyCustomerView(APIView):
                                         meter_type=d.get("meter_type"))
         keep = ("customer_name", "customer_address", "customer_arrears", "outstanding",
                 "min_purchase_amount", "max_purchase_amount", "status", "due_date",
-                "current_bouquet", "renewal_amount", "service_name", "customer_account_type")
+                "current_bouquet", "renewal_amount", "service_name", "customer_account_type",
+                "customer_username", "minimum_amount", "maximum_amount")
         return Response({k: info.get(k) for k in keep if k in info})
 
 
@@ -99,10 +102,9 @@ class BillOrderViewSet(mixins.CreateModelMixin, viewsets.ReadOnlyModelViewSet):
         ser.is_valid(raise_exception=True)
         data = dict(ser.validated_data)
         method = data.pop("payment_method")
-        gateway = data.pop("gateway", None)
         try:
             order, url = services.create_order(user=request.user, data=data,
-                                               payment_method=method, gateway=gateway)
+                                               payment_method=method)
         except CheckoutError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
         body = BillOrderSerializer(order).data
@@ -134,8 +136,7 @@ class WalletFundView(APIView):
         ser.is_valid(raise_exception=True)
         try:
             payment, url = services.start_wallet_topup(
-                user=request.user, amount=ser.validated_data["amount"],
-                gateway=ser.validated_data.get("gateway"))
+                user=request.user, amount=ser.validated_data["amount"])
         except CheckoutError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
         return Response({"authorization_url": url, "reference": payment.reference},

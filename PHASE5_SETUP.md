@@ -1,7 +1,8 @@
 # JobCatch: Phase 1 updates + Phase 2 features — setup & deployment
 
 This release adds employer KYC, paid job listings, paid artisan verification,
-bill payments with a wallet (VTU.ng), job seeker Pro with WhatsApp alerts and
+bill payments with a wallet (VTU.ng: airtime, data, electricity, cable TV,
+recharge-card PINs and betting-wallet funding), job seeker Pro with WhatsApp alerts and
 in-app upgrade prompts, plus the four Phase 1 fixes. Everything is wired into
 the existing apps; no manual code edits are needed after copying the files in.
 
@@ -51,7 +52,8 @@ All are optional with safe defaults. See `.env.example` for the full list.
 |---|---|---|
 | `FLUTTERWAVE_SECRET_KEY` | — | Enables Flutterwave at checkout |
 | `FLUTTERWAVE_WEBHOOK_HASH` | — | The "secret hash" you set in the Flutterwave dashboard |
-| `DEFAULT_PAYMENT_GATEWAY` | `paystack` | Used when the user doesn't pick one |
+| `DEFAULT_PAYMENT_GATEWAY` | `paystack` | Plans, listing packages, verification fee, Seeker Pro, CV service |
+| `BILLING_GATEWAY` | `flutterwave` | **Bill payments and wallet top-ups always use this gateway.** Requires `FLUTTERWAVE_SECRET_KEY` + `FLUTTERWAVE_WEBHOOK_HASH`; without them card bill payments/top-ups are refused (wallet purchases still work) |
 | `FRONTEND_URL` | `https://jobcatchonline.com` | Links in WhatsApp alerts |
 | `PAID_JOB_LISTINGS_ENABLED` | `True` | `False` = jobs publish free and never expire |
 | `KYC_REQUIRED_TO_POST_JOBS` | `True` | |
@@ -67,7 +69,8 @@ All are optional with safe defaults. See `.env.example` for the full list.
 | `WHATSAPP_JOB_ALERT_TEMPLATE` | `job_alert` | Approved template with 3 body variables: title, company, link |
 | `VTU_USERNAME`, `VTU_PASSWORD` | — | VTU.ng **reseller** account login |
 | `VTU_USER_PIN` | — | Used to verify VTU.ng webhook signatures |
-| `BILL_FEE_AIRTIME` … `BILL_FEE_TV` | `0` | Optional flat convenience fee per purchase |
+| `BILL_FEE_AIRTIME` … `BILL_FEE_TV`, `BILL_FEE_EPINS`, `BILL_FEE_BETTING` | `0` | Optional flat convenience fee per purchase |
+| `BILL_BETTING_ENABLED` | `True` | `False` hides betting-wallet funding (tab, catalogue and API) without a deploy |
 | `PRIVATE_MEDIA_ROOT` | `<RENDER_DISK_PATH>/_private` | KYC documents; never served by `/media/` |
 
 ## 4. Webhooks & external dashboards

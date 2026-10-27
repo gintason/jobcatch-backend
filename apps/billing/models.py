@@ -1,5 +1,6 @@
 """
-Wallet + bill payments (airtime, data, electricity, cable TV) via VTU.ng.
+Wallet + bill payments (airtime, data, electricity, cable TV, recharge PINs,
+betting wallet funding) via VTU.ng.
 
 Wallet           one per user; balance only ever changes through a
                  WalletTransaction row (double-entry style ledger), inside a
@@ -66,6 +67,8 @@ class BillService(models.TextChoices):
     DATA = "data", "Data bundle"
     ELECTRICITY = "electricity", "Electricity"
     TV = "tv", "Cable TV"
+    EPINS = "epins", "Recharge card PINs"
+    BETTING = "betting", "Betting wallet funding"
 
 
 class PaymentMethod(models.TextChoices):
@@ -87,8 +90,8 @@ class BillOrder(BaseModel):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
                              related_name="bill_orders")
     service = models.CharField(max_length=20, choices=BillService.choices, db_index=True)
-    provider = models.CharField(max_length=40)              # VTU service_id: mtn, ikeja-electric, dstv
-    customer_id = models.CharField(max_length=40)           # phone / meter / smartcard number
+    provider = models.CharField(max_length=40)              # VTU service_id: mtn, ikeja-electric, dstv, Bet9ja
+    customer_id = models.CharField(max_length=40, blank=True)  # phone / meter / smartcard / betting ID
     variation_id = models.CharField(max_length=40, blank=True)   # data plan / meter type / bouquet
     variation_label = models.CharField(max_length=120, blank=True)
     subscription_type = models.CharField(max_length=10, blank=True)  # tv: change | renew
@@ -111,6 +114,11 @@ class BillOrder(BaseModel):
     provider_message = models.CharField(max_length=255, blank=True)
     token = models.CharField(max_length=120, blank=True)        # electricity token
     units = models.CharField(max_length=40, blank=True)
+    # ePINs: how many cards were bought, and the PINs once the biller delivers
+    # them ([{"pin", "serial", "amount", "instruction"}]). Only ever shown to
+    # the buyer (orders are scoped to their owner).
+    quantity = models.PositiveSmallIntegerField(default=1)
+    epins = models.JSONField(default=list, blank=True)
     response = models.JSONField(default=dict, blank=True)
 
     sent_at = models.DateTimeField(null=True, blank=True)

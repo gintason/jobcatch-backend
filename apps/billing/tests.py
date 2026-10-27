@@ -158,6 +158,7 @@ def test_data_price_comes_from_biller_not_client(client, user):
     assert resp.json()["variation_label"] == "1GB - 30 Days"
 
 
+@override_settings(FLUTTERWAVE_SECRET_KEY="FLWSECK_TEST")
 @patch("apps.payments.services.get_gateway")
 def test_card_payment_dispatches_after_confirmation(mock_gw, client, user,
                                                     django_capture_on_commit_callbacks):
@@ -167,6 +168,8 @@ def test_card_payment_dispatches_after_confirmation(mock_gw, client, user,
     assert resp.json()["status"] == "awaiting_payment"
     assert resp.json()["authorization_url"] == "https://pay/x"
     payment = Payment.objects.get(purpose="bill_payment")
+    assert payment.gateway == "flutterwave"
+    mock_gw.assert_called_with("flutterwave")
 
     fake = FakeVTU({"/api/v2/airtime": _order("completed-api")})
     with patch.object(VTUClient, "_raw", fake), \
@@ -197,3 +200,110 @@ def test_unconfigured_biller_refunds(client, user):
     resp = _buy_airtime(client, user)
     assert resp.json()["status"] == "refunded"
     assert Wallet.objects.get(user=user).balance == Decimal("1000.00")
+
+
+@override_settings(FLUTTERWAVE_SECRET_KEY="FLWSECK_TEST", PAYSTACK_SECRET_KEY="sk_test")
+@patch("apps.payments.services.get_gateway")
+def test_bills_and_topups_always_use_flutterwave(mock_gw, client, user):
+    """Even if the client asks for Paystack, bills and top-ups go to Flutterwave."""
+    mock_gw.return_value.initialize.return_value = {"authorization_url": "https://flw/x"}
+    client.force_authenticate(user)
+    resp = client.post("/api/v1/billing/wallet/fund/", {"amount": "2000", "gateway": "paystack"},
+                       format="json")
+    assert resp.status_code == 201
+    assert Payment.objects.get(reference=resp.json()["reference"]).gateway == "flutterwave"
+    with patch.object(VTUClient, "_raw", FakeVTU({})):
+        resp = client.post("/api/v1/billing/orders/", {
+            "service": "airtime", "provider": "mtn", "customer_id": "08031234567",
+            "amount": "500", "payment_method": "card", "gateway": "paystack"}, format="json")
+    assert resp.status_code == 201
+    assert Payment.objects.get(purpose="bill_payment").gateway == "flutterwave"
+    assert client.get("/api/v1/billing/catalogue/").json()["gateway"] == "flutterwave"
+
+
+@override_settings(FLUTTERWAVE_SECRET_KEY="")
+def test_flutterwave_not_configured_blocks_card_but_not_wallet(client, user):
+    client.force_authenticate(user)
+    resp = client.post("/api/v1/billing/wallet/fund/", {"amount": "2000"}, format="json")
+    assert resp.status_code == 400
+    assert resp.json()["code"] == "billing_gateway_unavailable"
+    assert Payment.objects.count() == 0
+    _fund(user, 1000)
+    with patch.object(VTUClient, "_raw", FakeVTU({"/api/v2/airtime": _order("completed-api")})):
+        assert _buy_airtime(client, user).json()["status"] == "successful"   # wallet still works
+
+
+# ---------------------------------------------------------------- ePINs + betting
+def test_epins_delivered_and_stored_once(client, user):
+    _fund(user, 2000)
+    pins = [{"amount": "500", "pin": "89656105591652958", "serial": "00000033739289258",
+             "instruction": "To Recharge: Dial *311*PIN# SEND "},
+            {"amount": "500", "pin": "11112222333344445", "serial": "00000000000000001",
+             "instruction": "To Recharge: Dial *311*PIN# SEND "}]
+    fake = FakeVTU({"/api/v2/epins": _order("completed-api", epins=pins)})
+    client.force_authenticate(user)
+    with patch.object(VTUClient, "_raw", fake):
+        resp = client.post("/api/v1/billing/orders/", {
+            "service": "epins", "provider": "mtn", "variation_id": "500", "quantity": 2,
+            "payment_method": "wallet"}, format="json")
+    assert resp.status_code == 201, resp.json()
+    body = resp.json()
+    assert body["status"] == "successful" and body["amount"] == "1000.00"
+    assert [p["pin"] for p in body["epins"]] == ["89656105591652958", "11112222333344445"]
+    assert fake.calls[-1][1] == {"request_id": BillOrder.objects.get().request_id,
+                                 "service_id": "mtn", "value": 500, "quantity": 2}
+    assert "epins" not in str(BillOrder.objects.get().response)     # PINs kept in one place only
+    assert Wallet.objects.get(user=user).balance == Decimal("1000.00")
+    # Another user can't read the PINs.
+    other = User.objects.create_user("o@x.com", "Str0ng!Pass9", full_name="O", role="customer")
+    client.force_authenticate(other)
+    assert client.get(f"/api/v1/billing/orders/{body['id']}/").status_code == 404
+
+
+def test_epins_validation(client, user):
+    _fund(user, 50000)
+    client.force_authenticate(user)
+    with patch.object(VTUClient, "_raw", FakeVTU({})):
+        bad_value = client.post("/api/v1/billing/orders/", {
+            "service": "epins", "provider": "mtn", "variation_id": "300", "quantity": 1,
+            "payment_method": "wallet"}, format="json")
+        too_many = client.post("/api/v1/billing/orders/", {
+            "service": "epins", "provider": "mtn", "variation_id": "100", "quantity": 41,
+            "payment_method": "wallet"}, format="json")
+    assert bad_value.status_code == 400 and too_many.status_code == 400
+
+
+def test_betting_funding_and_refund(client, user):
+    _fund(user, 5000)
+    client.force_authenticate(user)
+    verify = FakeVTU({"/api/v2/verify-customer": (200, {"code": "success", "data": {
+        "customer_name": "John Smith", "customer_username": "jsmith", "minimum_amount": 100}})})
+    with patch.object(VTUClient, "_raw", verify):
+        info = client.post("/api/v1/billing/verify-customer/", {
+            "service": "betting", "provider": "Bet9ja", "customer_id": "12345"}, format="json")
+    assert info.json()["customer_name"] == "John Smith"
+    ok = FakeVTU({"/api/v2/betting": _order("completed-api")})
+    with patch.object(VTUClient, "_raw", ok):
+        resp = client.post("/api/v1/billing/orders/", {
+            "service": "betting", "provider": "Bet9ja", "customer_id": "12345", "amount": "1500",
+            "payment_method": "wallet"}, format="json")
+    assert resp.json()["status"] == "successful"
+    assert ok.calls[-1][1]["service_id"] == "Bet9ja" and ok.calls[-1][1]["amount"] == 1500
+    refused = FakeVTU({"/api/v2/betting": (400, {"code": "below_minimum_amount"})})
+    with patch.object(VTUClient, "_raw", refused):
+        resp = client.post("/api/v1/billing/orders/", {
+            "service": "betting", "provider": "Bet9ja", "customer_id": "12345", "amount": "1000",
+            "payment_method": "wallet"}, format="json")
+    assert resp.json()["status"] == "refunded"
+    assert Wallet.objects.get(user=user).balance == Decimal("3500.00")
+
+
+@override_settings(BILL_BETTING_ENABLED=False)
+def test_betting_can_be_switched_off(client, user):
+    _fund(user, 5000)
+    client.force_authenticate(user)
+    assert client.get("/api/v1/billing/catalogue/").json()["betting"] == []
+    resp = client.post("/api/v1/billing/orders/", {
+        "service": "betting", "provider": "Bet9ja", "customer_id": "12345", "amount": "1000",
+        "payment_method": "wallet"}, format="json")
+    assert resp.status_code == 400

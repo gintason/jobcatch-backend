@@ -83,6 +83,10 @@ services:
         sync: false
       - key: DEFAULT_PAYMENT_GATEWAY
         value: paystack
+      - key: BILLING_GATEWAY
+        value: flutterwave
+      - key: BILL_BETTING_ENABLED
+        value: "True"
       - key: FRONTEND_URL
         value: https://jobcatchonline.com
       - key: PAID_JOB_LISTINGS_ENABLED
@@ -151,6 +155,8 @@ services:
         sync: false
       - key: FLUTTERWAVE_SECRET_KEY
         sync: false
+      - key: BILLING_GATEWAY
+        value: flutterwave
       - key: VTU_USERNAME
         sync: false
       - key: VTU_PASSWORD

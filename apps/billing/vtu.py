@@ -37,6 +37,7 @@ DEFINITE_FAILURE_CODES = {
     "above_maximum_amount", "below_customer_arrears", "invalid_product",
     "product_unavailable", "order_failed", "insufficient_funds", "duplicate_order",
     "rate_limit_exceeded", "wallet_busy", "failure", "invalid_value",
+    "below_minimum_quantity", "above_maximum_quantity",
 }
 
 
@@ -192,6 +193,16 @@ class VTUClient:
         if amount is not None:
             payload["amount"] = int(amount)
         return self._order_call("/api/v2/tv", payload)
+
+    def buy_epins(self, *, request_id, service_id, value, quantity):
+        return self._order_call("/api/v2/epins", {
+            "request_id": request_id, "service_id": service_id,
+            "value": int(value), "quantity": int(quantity)})
+
+    def buy_betting(self, *, request_id, customer_id, service_id, amount):
+        return self._order_call("/api/v2/betting", {
+            "request_id": request_id, "customer_id": customer_id, "service_id": service_id,
+            "amount": int(amount)})
 
     def requery(self, request_id):
         status, body = self._call("POST", "/api/v2/requery", {"request_id": request_id})
