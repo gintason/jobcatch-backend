@@ -89,6 +89,8 @@ services:
         value: "True"
       - key: FRONTEND_URL
         value: https://jobcatchonline.com
+      - key: COMPLAINTS_NOTIFY_EMAIL
+        value: info@jobcatchonline.com
       - key: PAID_JOB_LISTINGS_ENABLED
         value: "True"
       - key: KYC_REQUIRED_TO_POST_JOBS

@@ -63,6 +63,7 @@ LOCAL_APPS = [
     "apps.listings",
     "apps.billing",
     "apps.engagement",
+    "apps.complaints",
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
@@ -141,6 +142,7 @@ REST_FRAMEWORK = {
         "user": "1000/day",
         "login": "10/min",     # scoped — brute-force protection
         "otp": "5/min",        # scoped — OTP request/verify abuse protection
+        "complaint": "10/hour",  # scoped — complaint box spam protection
     },
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
 }
@@ -228,6 +230,9 @@ DEFAULT_PAYMENT_GATEWAY = env("DEFAULT_PAYMENT_GATEWAY", default="paystack")
 BILLING_GATEWAY = env("BILLING_GATEWAY", default="flutterwave")
 # Flutterwave signs webhooks by echoing this "secret hash" (set in the FLW dashboard).
 FLUTTERWAVE_WEBHOOK_HASH = env("FLUTTERWAVE_WEBHOOK_HASH", default="")
+
+# Support inbox that receives a copy of every complaint (blank = in-app alerts only).
+COMPLAINTS_NOTIFY_EMAIL = env("COMPLAINTS_NOTIFY_EMAIL", default="info@jobcatchonline.com")
 
 # --- Paid job listings ---
 # When True, a job only goes live once a listing credit (bought package) is spent.

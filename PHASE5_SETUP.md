@@ -71,6 +71,7 @@ All are optional with safe defaults. See `.env.example` for the full list.
 | `VTU_USER_PIN` | — | Used to verify VTU.ng webhook signatures |
 | `BILL_FEE_AIRTIME` … `BILL_FEE_TV`, `BILL_FEE_EPINS`, `BILL_FEE_BETTING` | `0` | Optional flat convenience fee per purchase |
 | `BILL_BETTING_ENABLED` | `True` | `False` hides betting-wallet funding (tab, catalogue and API) without a deploy |
+| `COMPLAINTS_NOTIFY_EMAIL` | `info@jobcatchonline.com` | Support inbox copied on every new complaint |
 | `PRIVATE_MEDIA_ROOT` | `<RENDER_DISK_PATH>/_private` | KYC documents; never served by `/media/` |
 
 ## 4. Webhooks & external dashboards
@@ -91,6 +92,16 @@ JobCatch wallet automatically. Watch the balance in VTU.ng.
 - **In-app review dashboard:** `/admin/reviews` (log in as an admin user):
   employer KYC and artisan verification queues, document viewer, automated
   check results, approve/reject/revoke/override, full audit history.
+- **Complaint box:** anyone (signed in or not) can report an artisan, wrong
+  billing, a payment, an employer or anything else at `/complaints`. Each
+  complaint records name, email, phone, the date of the report, an optional
+  incident date, artisan / transaction reference and an optional private
+  attachment, and gets a reference (`JCC-YYYYMMDD-XXXXXX`). The complainant gets
+  an acknowledgement email; admins get an in-app alert and
+  `COMPLAINTS_NOTIFY_EMAIL` gets a copy. Handle them in `/admin/reviews` →
+  **Complaints** (status, reply to the complainant, internal note). Replies and
+  status changes are emailed; complainants can track status at `/complaints`
+  with their reference + email.
 - **Django admin** additions: Employer KYC cases, Job packages (prices/credits/
   duration editable inline), Package purchases, Bill orders (requery action),
   Wallets & ledger (read-only), Upgrade prompts (copy, CTA, cooldown; shows

@@ -33,6 +33,7 @@ urlpatterns = [
     path("api/v1/", include("apps.listings.urls")),       # paid job listing packages
     path("api/v1/", include("apps.billing.urls")),        # wallet + bill payments (VTU)
     path("api/v1/", include("apps.engagement.urls")),     # upgrade prompts, seeker Pro, job alerts
+    path("api/v1/", include("apps.complaints.urls")),     # complaint box
 
     # --- OpenAPI schema + docs ---
     path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
