@@ -127,8 +127,9 @@ def send_contact_otp(kyc, channel, request=None):
             raise ValidationError({"contact_phone": str(exc)}) from exc
         _otp, code = ContactOTP.issue(user, channel, destination)
         try:
-            send_sms(destination, f"Your JobCatch verification code is {code}. "
-                                  f"Expires in {settings.KYC_OTP_TTL_MINUTES} minutes.")
+            # Must match the sample message approved with the Termii sender ID.
+            send_sms(destination, f"Your JobCatch verification code is {code}. This code expires "
+                                  f"in {settings.KYC_OTP_TTL_MINUTES} minutes. Do not share with anyone.")
         except SMSError as exc:
             logger.warning("KYC SMS OTP failed: %s", exc)
             raise ValidationError({"detail": "We couldn't send the SMS right now. "
