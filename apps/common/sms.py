@@ -52,6 +52,11 @@ def _send_termii(phone, message):
     try:
         with urllib.request.urlopen(req, timeout=20) as resp:
             body = json.loads(resp.read().decode() or "{}")
+    except urllib.error.HTTPError as exc:
+        # Termii explains rejections (sender ID, channel, balance…) in the body.
+        detail = exc.read().decode(errors="replace")[:500]
+        raise SMSError(f"Termii rejected the SMS (HTTP {exc.code}): {detail} "
+                       f"[sender={settings.TERMII_SENDER_ID!r} channel={settings.TERMII_CHANNEL!r}]") from exc
     except (urllib.error.URLError, ValueError) as exc:
         raise SMSError(f"Could not send SMS: {exc}") from exc
     if body.get("code") not in (None, "ok"):
