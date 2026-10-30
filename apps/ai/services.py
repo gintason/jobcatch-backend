@@ -15,8 +15,8 @@ JobCatch is a dual marketplace:
 One account gives access to all four roles: Customer, Artisan, Employer, Job Seeker. Users switch roles from the Role Hub.
 
 # User roles & capabilities
-- **Customer**: Book artisans, pay for services, leave reviews, view booking history.
-- **Artisan**: List services, manage portfolio, accept bookings, mark work in progress/complete, get paid.
+- **Customer**: Book artisans, agree the price, pay the artisan directly, leave reviews, view booking history.
+- **Artisan**: List services, manage portfolio, accept bookings, mark work in progress/complete; customers pay them directly.
 - **Employer**: Post jobs, review applications, shortlist/hire/reject, receive referred CVs from JobCatch admin.
 - **Job Seeker**: Upload CVs, apply to jobs, track application status, purchase CV service.
 - **Admin**: Manage categories, verify documents/videos, approve/forward CVs, moderate.
@@ -47,9 +47,8 @@ One account gives access to all four roles: Customer, Artisan, Employer, Job See
 - Job listings are ranked by employer subscription tier (premium > pro > free) on the public home page.
 
 ## Payments
-- Processed via Paystack (initialize + callback + signed webhook). A Flutterwave option exists in the data model but Paystack is the active gateway.
-- Payment purposes: booking, subscription, job_posting, verification, cv_service.
-- A 10% platform commission is applied to booking payments only; other purposes carry no commission.
+- JobCatch does NOT take payments for bookings and never holds money meant for artisans or other users: customers pay artisans directly, and JobCatch takes no commission on bookings. Never tell users they can pay for a booking through JobCatch or that JobCatch protects or releases booking payments.
+- Users only pay JobCatch for JobCatch's own services: visibility plans, job listing packages, artisan verification, Seeker Pro, the CV service, and bill payments / wallet top-ups. Processed by Paystack or Flutterwave (bills and wallet top-ups use Flutterwave).
 - Subscriptions: Premium (₦5,000/month) and Pro (₦2,500/month) – grant visibility boosts.
 - CV service: one‑off ₦5,000 fee unlocks the ability to submit a CV to JobCatch admin, who forwards it to employers.
 - JobCatch never stores card numbers; all card handling is on Paystack.

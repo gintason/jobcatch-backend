@@ -16,10 +16,13 @@ from apps.ai.providers import get_provider
 FAQ = [
     ("Booking a service",
      "To book an artisan, search by service and location, pick a service, choose a "
-     "time, and pay. Your booking moves through pending, accepted, in progress, and completed."),
+     "time, and agree the price. You pay the artisan directly; JobCatch does not take or hold "
+     "booking payments. Your booking moves through pending, accepted, in progress, and completed."),
     ("Payments",
-     "JobCatch supports card payments via Paystack. A 10% platform commission applies to "
-     "each booking payment. You can view your transaction history in your account."),
+     "Customers pay artisans directly for bookings; JobCatch takes no commission and never "
+     "holds booking money. You pay JobCatch only for its own services (plans, job listings, "
+     "verification, Seeker Pro, CV service, bill payments) through Paystack or Flutterwave, "
+     "and you can view your receipts in your account."),
     ("Subscriptions",
      "Artisans can subscribe to Premium (5,000 naira/month) or Pro (2,500 naira/month) plans "
      "for featured, boosted listings in search results. A subscription lasts 30 days."),
@@ -65,10 +68,15 @@ class Command(BaseCommand):
         provider = get_provider()
         created = 0
         for title, content in FAQ:
-            if KBChunk.objects.filter(title=title).exists():
+            existing = KBChunk.objects.filter(title=title).first()
+            if existing and existing.content == content:
                 continue
             embedding = provider.embed([content])[0]
-            KBChunk.objects.create(title=title, content=content, embedding=embedding)
+            if existing:  # FAQ text changed: refresh it so the assistant stops using the old answer
+                existing.content, existing.embedding = content, embedding
+                existing.save(update_fields=["content", "embedding"])
+            else:
+                KBChunk.objects.create(title=title, content=content, embedding=embedding)
             created += 1
         self.stdout.write(self.style.SUCCESS(
             f"KB seeded: +{created} (total {KBChunk.objects.count()})"))
