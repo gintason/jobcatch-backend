@@ -66,6 +66,9 @@ def _complete(client, employer):
         client.post("/api/v1/kyc/employer/otp/send/", {"channel": "sms"}, format="json")
     assert sms[0][0] == "08031234567"
     code = re.search(r"\b(\d{6})\b", sms[0][1]).group(1)
+    # Word for word the template Termii approved for the "OE Alert" sender ID.
+    assert sms[0][1] == (f"Your Jobcatch verification code is {code}. This code expires in 10 minutes. "
+                         "Do not share with anyone.")
     resp = client.post("/api/v1/kyc/employer/otp/verify/", {"channel": "sms", "code": code},
                        format="json")
     assert resp.json()["is_phone_verified"] is True
