@@ -66,6 +66,14 @@ AIRTIME_MIN = {"mtn": Decimal("10")}
 AIRTIME_DEFAULT_MIN, AIRTIME_MAX = Decimal("50"), Decimal("50000")
 ELECTRICITY_MIN, ELECTRICITY_MAX = Decimal("500"), Decimal("100000")
 
+EDUCATION_PROVIDERS = {"waec": "WAEC", "jamb": "JAMB"}
+EDUCATION_SERVICE_TYPES = {"result_checker": "Result checker", "registration": "Registration",
+                           "jamb": "JAMB"}
+EDUCATION_MAX_QUANTITY = 10
+GIFTCARD_MAX_QUANTITY = 10
+RMB_CHANNELS = {"alipay": "Alipay", "wechat": "WeChat Pay", "bank": "Chinese bank transfer"}
+RMB_ACCOUNT_TYPES = ("nigerian", "chinese")
+
 SUCCESS_STATUSES = {"completed"}
 FAILED_STATUSES = {"failed", "refunded", "cancelled"}
 
@@ -80,6 +88,14 @@ def catalogue():
         "betting": ([{"id": k, "name": v} for k, v in BETTING_PROVIDERS.items()]
                     if settings.BILL_BETTING_ENABLED else []),
         "betting_enabled": settings.BILL_BETTING_ENABLED,
+        "education": ([{"id": k, "name": v} for k, v in EDUCATION_PROVIDERS.items()]
+                      if settings.BILL_EDUCATION_ENABLED else []),
+        "education_enabled": settings.BILL_EDUCATION_ENABLED,
+        "education_max_quantity": EDUCATION_MAX_QUANTITY,
+        "giftcard_buy_enabled": settings.BILL_GIFTCARD_BUY_ENABLED,
+        "giftcard_sell_enabled": settings.BILL_GIFTCARD_SELL_ENABLED,
+        "giftcard_max_quantity": GIFTCARD_MAX_QUANTITY,
+        "rmb_enabled": settings.BILL_RMB_ENABLED,
         "meter_types": list(METER_TYPES),
         "epin_values": list(EPIN_VALUES),
         "epin_pack_size": EPIN_PACK_SIZE,
@@ -88,11 +104,14 @@ def catalogue():
     }
 
 
-def plans(kind, provider):
-    """Data plans / TV bouquets, in the shape the web app uses."""
+def plans(kind, provider, service_type=None):
+    """Data plans / TV bouquets / exam PINs, in the shape the web app uses."""
     client = VTUClient()
-    items = client.data_plans(provider) if kind == "data" else client.cable_packages(provider)
-    label = "data_plan" if kind == "data" else "package_bouquet"
+    if kind == "education":
+        items = client.education_plans(provider, service_type)
+    else:
+        items = client.data_plans(provider) if kind == "data" else client.cable_packages(provider)
+    label = "package_bouquet" if kind == "tv" else "data_plan"
     return [{"variation_id": i.get("variation_code"), label: i.get("name", ""),
              "price": str(i.get("amount")), "availability": "Available"}
             for i in items if i.get("variation_code") and i.get("amount") is not None]
@@ -170,9 +189,9 @@ def _money(value):
         raise ValidationError({"amount": "Enter a valid amount."}) from exc
 
 
-def _find_variation(kind, provider, variation_id):
+def _find_variation(kind, provider, variation_id, service_type=None):
     try:
-        items = plans(kind, provider)
+        items = plans(kind, provider, service_type)
     except (VTUUnknown, VTUFailed) as exc:
         raise ValidationError({"detail": "Plans are temporarily unavailable. Try again shortly."}) from exc
     for item in items:
@@ -293,15 +312,167 @@ def build_order_fields(data):
         fields.update(customer_id=customer_id, amount=amount,
                       variation_label=f"{BETTING_PROVIDERS[provider]} wallet funding",
                       customer_name=(data.get("customer_name") or "")[:150])
+    elif service == BillService.EDUCATION:
+        _education_fields(fields, data, provider, customer_id)
+    elif service == BillService.GIFTCARD:
+        _giftcard_fields(fields, data)
+    elif service == BillService.RMB:
+        _rmb_fields(fields, data)
     else:
-        raise ValidationError({"service": "Choose airtime, data, electricity, tv, epins or betting."})
+        raise ValidationError({"service": "Choose a bill type."})
 
     fields["fee"] = settings.BILL_SERVICE_FEES.get(service, Decimal("0"))
     fields["total"] = fields["amount"] + fields["fee"]
     return fields
 
 
-def verify_customer(*, service, provider, customer_id, meter_type=None):
+def _pct(amount, percent):
+    return (Decimal(amount) * Decimal(percent) / 100).quantize(Decimal("0.01"))
+
+
+def _education_fields(fields, data, provider, customer_id):
+    if not settings.BILL_EDUCATION_ENABLED:
+        raise ValidationError({"service": "Exam PINs are not available right now."})
+    if provider not in EDUCATION_PROVIDERS:
+        raise ValidationError({"provider": "Choose WAEC or JAMB."})
+    service_type = data.get("service_type") or ("jamb" if provider == "jamb" else "result_checker")
+    if service_type not in EDUCATION_SERVICE_TYPES:
+        raise ValidationError({"service_type": "Choose a service."})
+    try:
+        quantity = int(data.get("quantity") or 1)
+    except (TypeError, ValueError) as exc:
+        raise ValidationError({"quantity": "Enter a quantity."}) from exc
+    if not (1 <= quantity <= EDUCATION_MAX_QUANTITY):
+        raise ValidationError({"quantity": f"Buy between 1 and {EDUCATION_MAX_QUANTITY}."})
+    plan = _find_variation("education", provider, data.get("variation_id"), service_type)
+    if provider == "jamb":
+        if not re.fullmatch(r"[\w-]{4,30}", customer_id):
+            raise ValidationError({"customer_id": "Enter the candidate's JAMB profile ID."})
+        quantity = 1
+    else:
+        customer_id = ""
+    fields.update(customer_id=customer_id, service_type=service_type, quantity=quantity,
+                  variation_id=str(plan["variation_id"]),
+                  amount=_money(Decimal(plan["price"]) * quantity),
+                  variation_label=(f"{plan.get('data_plan') or EDUCATION_PROVIDERS[provider]}"
+                                   f"{f' × {quantity}' if quantity > 1 else ''}")[:120],
+                  customer_name=(data.get("customer_name") or "")[:150])
+
+
+def giftcard_quote(*, product_id, amount, quantity):
+    """VTU.ng's NGN price for a gift card + JobCatch's margin."""
+    if not settings.BILL_GIFTCARD_BUY_ENABLED:
+        raise ValidationError({"service": "Gift cards are not available right now."})
+    try:
+        product_id, quantity = int(product_id), int(quantity or 1)
+        amount = Decimal(str(amount))
+    except Exception as exc:  # noqa: BLE001
+        raise ValidationError({"amount": "Choose a card and amount."}) from exc
+    if not (1 <= quantity <= GIFTCARD_MAX_QUANTITY) or amount <= 0:
+        raise ValidationError({"quantity": f"Buy between 1 and {GIFTCARD_MAX_QUANTITY} cards."})
+    try:
+        price = VTUClient().giftcard_price(product_id=product_id, amount=float(amount),
+                                           quantity=quantity)
+    except VTUFailed as exc:
+        raise ValidationError({"amount": str(exc)}) from exc
+    except VTUUnknown as exc:
+        raise ValidationError({"detail": "Gift card prices are temporarily unavailable."}) from exc
+    cost = _money(price.get("total_price_ngn"))
+    return {"cost_ngn": cost, "price_ngn": cost + _pct(cost, settings.GIFTCARD_BUY_MARGIN_PERCENT),
+            "quantity": quantity, "amount": amount, "product_id": product_id}
+
+
+def _giftcard_fields(fields, data):
+    quote = giftcard_quote(product_id=data.get("product_id"), amount=data.get("card_amount"),
+                           quantity=data.get("quantity"))
+    name = (data.get("product_name") or "Gift card")[:80]
+    currency = (data.get("card_currency") or "")[:3].upper()
+    fields.update(customer_id="", quantity=quote["quantity"], amount=quote["price_ngn"],
+                  variation_id=str(quote["product_id"]),
+                  variation_label=(f"{name} · {currency} {quote['amount']:,.2f}"
+                                   + (f" × {quote['quantity']}" if quote["quantity"] > 1 else ""))[:120],
+                  details={"product_id": quote["product_id"], "card_amount": str(quote["amount"]),
+                           "card_currency": currency, "product_name": name,
+                           "expected_amount_ngn": str(quote["cost_ngn"])})
+
+
+def rmb_rate(channel, account_type, rmb_amount):
+    """NGN per ¥1 for this order from VTU.ng's tiers, plus the channel's limits."""
+    data = VTUClient().rmb_rates()
+    limits = data.get("limits") or {}
+    for ch in data.get("channels") or []:
+        if ch.get("channel") != channel:
+            continue
+        if not ch.get("is_available", True):
+            raise ValidationError({"channel": f"{RMB_CHANNELS[channel]} is unavailable right now."})
+        tiers = ch.get("rates") or []
+        if channel != "bank":
+            acct = next((a for a in ch.get("account_types") or [] if a.get("type") == account_type), None)
+            if not acct or not acct.get("is_available", True):
+                raise ValidationError({"account_type": "That account type is unavailable right now."})
+            tiers = acct.get("rates") or tiers
+        for t in tiers:
+            lo, hi = Decimal(str(t.get("min_rmb") or 0)), t.get("max_rmb")
+            if rmb_amount >= lo and (hi is None or rmb_amount <= Decimal(str(hi))):
+                return Decimal(str(t["ngn_per_rmb"])), limits
+        raise ValidationError({"rmb_amount": "No rate for that amount."})
+    raise ValidationError({"channel": "Choose a payment channel."})
+
+
+def rmb_quote(*, channel, account_type, rmb_amount):
+    if not settings.BILL_RMB_ENABLED:
+        raise ValidationError({"service": "RMB payments are not available right now."})
+    if channel not in RMB_CHANNELS:
+        raise ValidationError({"channel": "Choose Alipay, WeChat Pay or bank transfer."})
+    if channel != "bank" and account_type not in RMB_ACCOUNT_TYPES:
+        raise ValidationError({"account_type": "Choose a Nigerian or Chinese account."})
+    try:
+        rmb_amount = Decimal(str(rmb_amount)).quantize(Decimal("0.01"))
+        rate, limits = rmb_rate(channel, account_type, rmb_amount)
+    except (VTUUnknown, VTUFailed) as exc:
+        raise ValidationError({"detail": "RMB rates are temporarily unavailable."}) from exc
+    except (ArithmeticError, ValueError, TypeError) as exc:
+        raise ValidationError({"rmb_amount": "Enter an amount in yuan."}) from exc
+    lo, hi = Decimal(str(limits.get("min_rmb") or 1)), Decimal(str(limits.get("max_rmb") or 10**9))
+    if not (lo <= rmb_amount <= hi):
+        raise ValidationError({"rmb_amount": f"Send between ¥{lo:,.0f} and ¥{hi:,.0f}."})
+    cost = _money(rmb_amount * rate)
+    margin = _pct(cost, settings.RMB_MARGIN_PERCENT)
+    return {"rmb_amount": rmb_amount, "rate": rate, "cost_ngn": cost, "price_ngn": cost + margin,
+            "customer_rate": ((cost + margin) / rmb_amount).quantize(Decimal("0.01"))}
+
+
+def _rmb_fields(fields, data):
+    channel, account_type = data.get("channel"), data.get("account_type") or ""
+    q = rmb_quote(channel=channel, account_type=account_type, rmb_amount=data.get("rmb_amount"))
+    name = (data.get("recipient_name") or "").strip()
+    if not re.fullmatch(r"[A-Za-z][A-Za-z .'-]{1,99}", name):
+        raise ValidationError({"recipient_name": "Enter the recipient's full name (letters only)."})
+    description = (data.get("description") or "").strip()
+    if not (5 <= len(description) <= 1000):
+        raise ValidationError({"description": "Say what the payment is for (5–1,000 characters)."})
+    identifier = re.sub(r"\s", "", data.get("recipient_identifier") or "")
+    details = {"channel": channel, "rmb_amount": str(q["rmb_amount"]), "ngn_per_rmb": str(q["rate"]),
+               "customer_rate": str(q["customer_rate"]), "cost_ngn": str(q["cost_ngn"]),
+               "recipient_name": name, "recipient_identifier": identifier[:100],
+               "description": description}
+    if channel == "bank":
+        bank, account = (data.get("recipient_bank_name") or "").strip(), re.sub(r"\D", "", data.get(
+            "recipient_bank_account_number") or "")
+        if not bank or not (8 <= len(account) <= 30):
+            raise ValidationError({"recipient_bank_account_number": "Enter the Chinese bank and account number."})
+        details.update(recipient_bank_name=bank[:100], recipient_bank_account_number=account,
+                       recipient_identifier=account)
+    else:
+        details["account_type"] = account_type
+        if not data.get("qr_code"):
+            raise ValidationError({"qr_code": f"Upload the recipient's {RMB_CHANNELS[channel]} receive QR code."})
+    fields.update(customer_id=(identifier or name)[:40], customer_name=name[:150],
+                  amount=q["price_ngn"], details=details,
+                  variation_label=f"¥{q['rmb_amount']:,.2f} via {RMB_CHANNELS[channel]}"[:120])
+
+
+def verify_customer(*, service, provider, customer_id, meter_type=None, variation_code=None):
     """Meter / smartcard / betting-account lookup, in the shape the web app uses."""
     provider = (provider or "").lower()
     customer_id = re.sub(r"\s", "", customer_id)
@@ -323,6 +494,13 @@ def verify_customer(*, service, provider, customer_id, meter_type=None):
                     "due_date": v.get("due_date"), "current_bouquet": v.get("current_bouquet"),
                     "renewal_amount": v.get("renewal_amount") or v.get("current_bouquet_price"),
                     "supports_renewal": v.get("supports_renewal")}
+        if service == BillService.EDUCATION:
+            if provider != "jamb":
+                raise ValidationError({"provider": "Only JAMB profiles can be verified."})
+            if not variation_code:
+                raise ValidationError({"variation_id": "Choose the JAMB service first."})
+            v = client.verify_jamb(profile_id=customer_id, variation_code=variation_code)
+            return {"customer_name": v.get("customer_name"), "exam_type": v.get("exam_type")}
         if service == BillService.BETTING:
             if not settings.BILL_BETTING_ENABLED or provider not in BETTING_PROVIDERS:
                 raise ValidationError({"provider": "Choose your betting company."})
@@ -345,6 +523,8 @@ def new_request_id():
 def create_order(*, user, data, payment_method):
     """Returns (order, authorization_url|None)."""
     fields = build_order_fields(data)
+    if data.get("qr_code") and fields["service"] == BillService.RMB:
+        fields["attachment"] = data["qr_code"]
     if payment_method not in PaymentMethod.values:
         raise ValidationError({"payment_method": "Choose wallet or card."})
 
@@ -409,6 +589,28 @@ def purchase_payload(order):
     if s == BillService.BETTING:
         return {"provider": order.provider, "account_id": order.customer_id,
                 "amount": int(order.amount)}
+    if s == BillService.EDUCATION:
+        body = {"provider": order.provider, "service_type": order.service_type,
+                "variation_code": order.variation_id, "quantity": order.quantity}
+        if order.provider == "jamb":
+            body["profile_id"] = order.customer_id
+        return body
+    d = order.details or {}
+    if s == BillService.GIFTCARD:
+        return {"product_id": int(d["product_id"]), "amount": float(d["card_amount"]),
+                "quantity": order.quantity, "expected_amount_ngn": float(d["expected_amount_ngn"])}
+    if s == BillService.RMB:
+        body = {"channel": d["channel"], "rmb_amount": d["rmb_amount"],
+                "recipient_name": d["recipient_name"], "description": d["description"]}
+        if d["channel"] == "bank":
+            body.update(recipient_identifier=d["recipient_bank_account_number"],
+                        recipient_bank_name=d["recipient_bank_name"],
+                        recipient_bank_account_number=d["recipient_bank_account_number"])
+        else:
+            body[f"{d['channel']}_account_type"] = d["account_type"]
+            if d.get("recipient_identifier"):
+                body["recipient_identifier"] = d["recipient_identifier"]
+        return body
     body = {"provider": order.provider, "smartcard_number": order.customer_id, "quantity": 1}
     if order.subscription_type == "renew":
         body.update(subscription_type="renew", amount=int(order.amount))
@@ -422,8 +624,16 @@ def purchase_payload(order):
 def _send(order):
     """POST the order (or re-POST it: the Idempotency-Key makes that a safe replay)."""
     try:
+        files = None
+        if order.service == BillService.RMB and order.attachment:
+            import mimetypes
+
+            with order.attachment.open("rb") as fh:
+                name = order.attachment.name.rsplit("/", 1)[-1]
+                files = [("qr_code", name, fh.read(),
+                          mimetypes.guess_type(name)[0] or "image/jpeg")]
         result = VTUClient().purchase(order.service, purchase_payload(order),
-                                      idempotency_key=order.request_id)
+                                      idempotency_key=order.request_id, files=files)
     except VTUFailed as exc:
         logger.warning("Bill %s refused by biller: %s %s", order.request_id, exc.code, exc)
         _fail_and_refund(order, f"{exc}", exc.body)
@@ -493,13 +703,26 @@ def apply_biller_status(order, tx, *, source):
         if isinstance(tx.get("epin_cards"), list) and tx["epin_cards"] and not any(
                 p.get("file") for p in (order.epins or []) if isinstance(p, dict)):
             order.epins = _store_epin_packs(order, tx["epin_cards"])
+        codes = _delivered_codes(tx)
+        if codes:
+            order.epins = codes
+        if isinstance(tx.get("order"), dict):          # RMB: the rate VTU.ng actually applied
+            o = tx["order"]
+            ngn = o.get("ngn_amount") or {}
+            order.details = {**(order.details or {}), "provider_rate": o.get("exchange_rate"),
+                             "provider_ngn": ngn.get("raw") if isinstance(ngn, dict) else ngn}
         # Never keep voucher images or other delivery secrets inside the raw payload.
         safe = {k: v for k, v in tx.items() if k not in ("epin_cards", "gift_card_codes",
                                                          "education_exam_pins")}
         order.response = {**(order.response or {}), source: safe}
         fields = ["provider_status", "provider_order_id", "customer_name", "token", "units",
-                  "epins", "response", "updated_at"]
-        if provider_status in SUCCESS_STATUSES:
+                  "epins", "details", "response", "updated_at"]
+        if provider_status in SUCCESS_STATUSES and _awaiting_codes(order) and source != "lookup":
+            # Exam PINs and gift card codes are only returned by the transaction
+            # lookup (never in webhooks): fetch them before marking it delivered.
+            order.save(update_fields=fields)
+            fetch = order.provider_order_id
+        elif provider_status in SUCCESS_STATUSES:
             order.status = BillStatus.SUCCESSFUL
             order.completed_at = timezone.now()
             order.provider_message = ""
@@ -507,11 +730,48 @@ def apply_biller_status(order, tx, *, source):
             order.save(update_fields=fields)
             transaction.on_commit(lambda: _notify_order(order))
             return order
-        order.save(update_fields=fields)
+        else:
+            order.save(update_fields=fields)
+            fetch = None
+    if provider_status in SUCCESS_STATUSES and fetch:
+        try:
+            looked_up = VTUClient().get_transaction(reference=fetch).transaction
+        except (VTUFailed, VTUUnknown) as exc:
+            logger.warning("Order %s completed but codes not fetched yet (%s); requery will retry",
+                           order.request_id, exc)
+            return order
+        return apply_biller_status(order, looked_up, source="lookup")
     if provider_status in FAILED_STATUSES:
         _fail_and_refund(order, tx.get("failure_reason") or f"Biller status: {provider_status}", safe)
         order.refresh_from_db()
     return order
+
+
+def _awaiting_codes(order):
+    from .vtu import is_sandbox
+
+    # The sandbox doesn't store transactions, so there's nothing to look up there.
+    return (order.service in (BillService.EDUCATION, BillService.GIFTCARD) and not order.epins
+            and not is_sandbox())
+
+
+def _delivered_codes(tx):
+    """Exam PINs / gift card codes in the receipt's {pin, serial, amount, instruction} shape."""
+    out = []
+    pins = tx.get("education_exam_pins")
+    if isinstance(pins, dict):
+        pins = pins.get("pins") or list(pins.values())
+    for p in pins or []:
+        if isinstance(p, dict):
+            out.append({"pin": str(p.get("pin") or p.get("token") or ""),
+                        "serial": str(p.get("serial") or p.get("serial_number") or ""),
+                        "amount": "", "instruction": ""})
+    for c in tx.get("gift_card_codes") or []:
+        if isinstance(c, dict):
+            out.append({"pin": str(c.get("cardNumber") or c.get("code") or ""),
+                        "serial": str(c.get("pinCode") or ""), "amount": "",
+                        "instruction": str(c.get("claimUrl") or "")})
+    return [c for c in out if c["pin"]]
 
 
 def _fail_and_refund(order, reason, body=None):
@@ -552,7 +812,8 @@ def requery_order(order):
 
     try:
         result = VTUClient().get_transaction(reference=order.provider_order_id or None,
-                                             idempotency_key=order.request_id)
+                                             idempotency_key=order.request_id,
+                                             service=order.service)
     except VTUFailed as exc:
         if exc.code != "not_found" or is_sandbox():
             # The sandbox never stores transactions: the webhook settles them.
@@ -565,7 +826,7 @@ def requery_order(order):
         return _send(order)
     except VTUUnknown:
         return order
-    return apply_biller_status(order, result.transaction, source="requery")
+    return apply_biller_status(order, result.transaction, source="lookup")
 
 
 def requery_stale_orders(min_age_minutes=2, max_age_hours=72):
@@ -598,3 +859,175 @@ def _notify_order(order):
                     f"{f' for {order.customer_id}' if order.customer_id else ''}. "
                     f"₦{order.total:,.2f} was returned to your wallet.",
                data={"bill_order_id": str(order.id), "url": f"/bills/receipt/{order.id}"})
+
+
+# ------------------------------------------------------------------ gift card selling
+GIFTCARD_IMAGE_TYPES = {"image/jpeg", "image/png"}
+GIFTCARD_IMAGE_MAX = 2 * 1024 * 1024
+
+
+def _trade_payout(provider_amount):
+    keep = _pct(provider_amount, settings.GIFTCARD_SELL_MARGIN_PERCENT)
+    return (Decimal(str(provider_amount)) - keep).quantize(Decimal("0.01"))
+
+
+def submit_giftcard_trade(*, user, data, images=()):
+    """Validate and submit a gift card for sale. Returns the GiftCardTrade."""
+    from django.core.files.base import ContentFile
+
+    from apps.common.storage import private_storage
+
+    from .models import GiftCardTrade, GiftCardTradeStatus
+
+    if not settings.BILL_GIFTCARD_SELL_ENABLED:
+        raise ValidationError({"service": "Gift card selling is not available right now."})
+    card_type = data.get("card_type")
+    if card_type not in ("ecode", "physical"):
+        raise ValidationError({"card_type": "Choose e-code or physical card."})
+    code = (data.get("code") or "").strip()
+    if card_type == "ecode" and len(code) < 10:
+        raise ValidationError({"code": "Enter the full redemption code."})
+    if card_type == "physical":
+        if not (1 <= len(images) <= 5):
+            raise ValidationError({"images": "Upload 1–5 clear photos of the card."})
+        for img in images:
+            if img.content_type not in GIFTCARD_IMAGE_TYPES or img.size > GIFTCARD_IMAGE_MAX:
+                raise ValidationError({"images": "Photos must be JPEG or PNG, up to 2 MB each."})
+    try:
+        amount = Decimal(str(data.get("card_amount"))).quantize(Decimal("0.01"))
+    except Exception as exc:  # noqa: BLE001
+        raise ValidationError({"card_amount": "Enter the card's value."}) from exc
+    if amount <= 0:
+        raise ValidationError({"card_amount": "Enter the card's value."})
+
+    trade = GiftCardTrade.objects.create(
+        user=user, request_id=f"JCG{timezone.now():%y%m%d}{uuid4().hex[:16]}",
+        slug=(data.get("slug") or "")[:60], card_name=(data.get("card_name") or "")[:120],
+        card_country=(data.get("card_country") or "").upper()[:4],
+        specific_country=(data.get("specific_country") or "")[:60], card_type=card_type,
+        sub_type=(data.get("sub_type") or "")[:40],
+        card_currency=(data.get("card_currency") or "").upper()[:3], card_amount=amount,
+        code=code[:200] if card_type == "ecode" else "")
+    files, stored = [], []
+    for i, img in enumerate(images):
+        content = img.read()
+        files.append(("images[]", f"card-{i + 1}.{'png' if img.content_type == 'image/png' else 'jpg'}",
+                      content, img.content_type))
+        stored.append(private_storage().save(
+            f"giftcard-trades/{user.id}/{trade.request_id}-{i + 1}"
+            f".{'png' if img.content_type == 'image/png' else 'jpg'}", ContentFile(content)))
+    if stored:
+        trade.images = stored
+        trade.save(update_fields=["images", "updated_at"])
+    payload = {"slug": trade.slug, "card_country": trade.card_country, "card_type": card_type,
+               "card_currency": trade.card_currency, "card_amount": str(amount),
+               "payout_currency": "NGN"}
+    if trade.sub_type:
+        payload["sub_type"] = trade.sub_type
+    if trade.specific_country:
+        payload["specific_country"] = trade.specific_country
+    if card_type == "ecode":
+        payload["additional_info"] = code
+    return _send_trade(trade, payload, files)
+
+
+def _send_trade(trade, payload, files):
+    from .models import GiftCardTradeStatus
+
+    try:
+        result = VTUClient().purchase("giftcard_sell", payload, path="/gift-cards/sell",
+                                      idempotency_key=trade.request_id, files=files or None)
+    except VTUFailed as exc:
+        trade.status = GiftCardTradeStatus.FAILED
+        trade.rejection_reason = str(exc)[:255]
+        trade.response = {"failure": exc.body}
+        trade.save(update_fields=["status", "rejection_reason", "response", "updated_at"])
+        raise ValidationError({"detail": str(exc)}) from exc
+    except VTUUnknown:
+        logger.warning("Gift card trade %s outcome unknown; requery will check", trade.request_id)
+        return trade
+    return apply_trade_status(trade, result.transaction, source="submit")
+
+
+def apply_trade_status(trade, tx, *, source):
+    """Move a gift card trade by VTU.ng's transaction; credit the wallet once on approval."""
+    from .models import GiftCardTrade, GiftCardTradeStatus
+    from .vtu import transaction_status
+
+    status = transaction_status(tx)
+    order = tx.get("order") if isinstance(tx.get("order"), dict) else {}
+    with transaction.atomic():
+        trade = GiftCardTrade.objects.select_for_update().get(pk=trade.pk)
+        if trade.status in (GiftCardTradeStatus.COMPLETED, GiftCardTradeStatus.CANCELLED):
+            return trade
+        trade.provider_reference = str(tx.get("reference") or trade.provider_reference)[:40]
+        payout = order.get("payout_amount") or {}
+        raw = payout.get("raw") if isinstance(payout, dict) else payout
+        amount = (tx.get("amount") or {}).get("raw") if isinstance(tx.get("amount"), dict) else tx.get("amount")
+        if raw is not None:
+            trade.expected_payout = _money(raw)
+        trade.response = {**(trade.response or {}), source: tx}
+        if status == "completed":
+            trade.provider_payout = _money(amount if amount is not None else trade.expected_payout)
+            trade.user_payout = _trade_payout(trade.provider_payout)
+            trade.status = GiftCardTradeStatus.COMPLETED
+            trade.completed_at = timezone.now()
+            trade.save()
+            _post(trade.user, kind=TxnKind.CREDIT, source=TxnSource.GIFTCARD_SALE,
+                  amount=trade.user_payout, reference=f"giftcard:{trade.request_id}",
+                  description=f"Gift card sale · {trade.card_name or trade.slug} "
+                              f"{trade.card_currency} {trade.card_amount:,.2f}")
+        elif status in ("cancelled", "failed", "refunded"):
+            trade.status = GiftCardTradeStatus.CANCELLED
+            trade.rejection_reason = str(tx.get("cancellation_reason") or tx.get("failure_reason")
+                                         or order.get("rejection_reason") or "Declined")[:255]
+            trade.save()
+        else:
+            trade.status = GiftCardTradeStatus.PENDING
+            trade.save()
+            return trade
+        transaction.on_commit(lambda: _notify_trade(trade))
+    return trade
+
+
+def requery_trade(trade):
+    from .models import GiftCardTradeStatus
+
+    if trade.status not in (GiftCardTradeStatus.SUBMITTING, GiftCardTradeStatus.PENDING):
+        return trade
+    try:
+        result = VTUClient().get_transaction(reference=trade.provider_reference or None,
+                                             idempotency_key=trade.request_id,
+                                             service="giftcard_sell")
+    except (VTUFailed, VTUUnknown):
+        return trade
+    return apply_trade_status(trade, result.transaction, source="lookup")
+
+
+def requery_stale_trades(min_age_minutes=5, max_age_days=14):
+    from .models import GiftCardTrade, GiftCardTradeStatus
+
+    now = timezone.now()
+    qs = GiftCardTrade.objects.filter(
+        status__in=[GiftCardTradeStatus.SUBMITTING, GiftCardTradeStatus.PENDING],
+        updated_at__lte=now - timedelta(minutes=min_age_minutes),
+        created_at__gte=now - timedelta(days=max_age_days))
+    for trade in qs:
+        requery_trade(trade)
+    return qs.count()
+
+
+def _notify_trade(trade):
+    from apps.notifications.services import notify
+
+    from .models import GiftCardTradeStatus
+
+    if trade.status == GiftCardTradeStatus.COMPLETED:
+        notify(trade.user, kind="bill_alert", title="Gift card sale approved",
+               body=f"₦{trade.user_payout:,.2f} for your {trade.card_name or trade.slug} card "
+                    f"was added to your JobCatch wallet.",
+               data={"giftcard_trade_id": str(trade.id), "url": "/bills?service=giftcard_sell"})
+    elif trade.status == GiftCardTradeStatus.CANCELLED:
+        notify(trade.user, kind="bill_alert", title="Gift card sale declined",
+               body=f"Your {trade.card_name or trade.slug} card was declined: {trade.rejection_reason}",
+               data={"giftcard_trade_id": str(trade.id), "url": "/bills?service=giftcard_sell"})

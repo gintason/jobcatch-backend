@@ -56,9 +56,10 @@ class FakeVTU:
         self.responses = responses
         self.calls = []
 
-    def __call__(self, method, path, payload=None, params=None, idempotency_key=None, timeout=45):
+    def __call__(self, method, path, payload=None, params=None, idempotency_key=None, timeout=45,
+                 files=None):
         self.calls.append({"method": method, "path": path, "payload": payload, "params": params,
-                           "key": idempotency_key})
+                           "key": idempotency_key, "files": files})
         result = self.responses.get(f"{method} {path}")
         if isinstance(result, list):
             result = result.pop(0)
@@ -454,3 +455,205 @@ def test_betting_can_be_switched_off(client, user):
         "service": "betting", "provider": "bet9ja", "customer_id": "12345", "amount": "1000",
         "payment_method": "wallet"}, format="json")
     assert resp.status_code == 400
+
+
+# ---------------------------------------------------------------- education / gift cards / RMB
+EDU_PLANS = (200, {"data": [{"variation_code": "waec-rc", "name": "WAEC Result Checker",
+                             "amount": 3500, "fixed_price": True}]})
+
+
+def test_waec_pins_fetched_on_completion(client, user):
+    _fund(user, 10000)
+    client.force_authenticate(user)
+    buy = FakeVTU({"GET /bills/education-plans": EDU_PLANS, "POST /bills/education": _created()})
+    with patch.object(VTUClient, "_raw", buy):
+        resp = client.post("/api/v1/billing/orders/", {
+            "service": "education", "provider": "waec", "service_type": "result_checker",
+            "variation_id": "waec-rc", "quantity": 2, "payment_method": "wallet"}, format="json")
+    assert resp.status_code == 201, resp.json()
+    assert resp.json()["amount"] == "7000.00" and resp.json()["status"] == "processing"
+    assert buy.calls[-1]["payload"] == {"provider": "waec", "service_type": "result_checker",
+                                        "variation_code": "waec-rc", "quantity": 2}
+    # Webhook -> lookup (PINs are never in webhooks).
+    pins = [{"serial": "SN1", "pin": "1111222233334444"}, {"serial": "SN2", "pin": "5555666677778888"}]
+    lookup = FakeVTU({"GET /transactions/BILL202611120830A1": (200, {"data": _tx(
+        "completed", education_exam_pins=pins)})})
+    event = {"id": "e", "event": "transaction.completed", "livemode": True,
+             "data": {"object": "transaction", "reference": "BILL202611120830A1", "status": "completed"}}
+    with patch.object(VTUClient, "_raw", lookup):
+        _webhook(client, event)
+    body = client.get(f"/api/v1/billing/orders/{resp.json()['id']}/").json()
+    assert body["status"] == "successful"
+    assert [p["pin"] for p in body["epins"]] == ["1111222233334444", "5555666677778888"]
+    assert "education_exam_pins" not in json.dumps(BillOrder.objects.get().response)
+
+
+def test_completed_without_pins_waits_for_lookup(client, user):
+    _fund(user, 10000)
+    client.force_authenticate(user)
+    fake = FakeVTU({"GET /bills/education-plans": EDU_PLANS,
+                    "POST /bills/education": _created("completed"),
+                    "GET /transactions/BILL202611120830A1": (503, {})})
+    with patch.object(VTUClient, "_raw", fake):
+        resp = client.post("/api/v1/billing/orders/", {
+            "service": "education", "provider": "waec", "service_type": "result_checker",
+            "variation_id": "waec-rc", "payment_method": "wallet"}, format="json")
+    assert resp.json()["status"] == "processing"          # not "successful" with no PINs
+
+
+def test_jamb_requires_profile_and_verifies(client, user):
+    client.force_authenticate(user)
+    fake = FakeVTU({"POST /bills/education/verify-jamb": (200, {"verification": {
+        "profile_id": "12341234", "customer_name": "ADA OBI", "exam_type": "UTME",
+        "variation_code": "jamb-utme"}})})
+    with patch.object(VTUClient, "_raw", fake):
+        info = client.post("/api/v1/billing/verify-customer/", {
+            "service": "education", "provider": "jamb", "customer_id": "12341234",
+            "variation_id": "jamb-utme"}, format="json")
+    assert info.json() == {"customer_name": "ADA OBI", "exam_type": "UTME"}
+
+
+def test_giftcards_and_rmb_are_off_by_default(client, user):
+    _fund(user, 100000)
+    client.force_authenticate(user)
+    cat = client.get("/api/v1/billing/catalogue/").json()
+    assert not cat["giftcard_buy_enabled"] and not cat["giftcard_sell_enabled"] and not cat["rmb_enabled"]
+    assert client.get("/api/v1/billing/rmb/").status_code == 404
+    assert client.get("/api/v1/billing/giftcards/countries/").status_code == 404
+    assert client.post("/api/v1/billing/orders/", {
+        "service": "giftcard", "product_id": 1, "card_amount": "25", "quantity": 1,
+        "payment_method": "wallet"}, format="json").status_code == 400
+    assert client.post("/api/v1/billing/giftcards/trades/", {
+        "slug": "amazon", "card_country": "US", "card_type": "ecode", "card_currency": "USD",
+        "card_amount": "100", "code": "AQ8BNC7X2P1234"}, format="json").status_code == 400
+
+
+@override_settings(BILL_GIFTCARD_BUY_ENABLED=True, GIFTCARD_BUY_MARGIN_PERCENT=Decimal("2"))
+def test_giftcard_purchase_delivers_codes(client, user):
+    _fund(user, 100000)
+    client.force_authenticate(user)
+    calc = (200, {"status": "success", "data": {"total_price_ngn": "40000.00",
+                                                "exact_unit_price_ngn": "40000.00", "quantity": "1"}})
+    codes = [{"cardNumber": "AMZN-1234-5678", "pinCode": None, "claimUrl": "https://amazon.com/g/x"}]
+    fake = FakeVTU({"POST /gift-cards/buy/calculate": calc,
+                    "POST /gift-cards/buy": (201, {"transaction": _tx("processing", reference="GCB1")}),
+                    "GET /transactions/GCB1": (200, {"data": _tx("completed", reference="GCB1",
+                                                                 gift_card_codes=codes)})})
+    with patch.object(VTUClient, "_raw", fake):
+        quote = client.post("/api/v1/billing/giftcards/quote/",
+                            {"product_id": 7, "amount": "25", "quantity": 1}, format="json").json()
+        resp = client.post("/api/v1/billing/orders/", {
+            "service": "giftcard", "product_id": 7, "product_name": "Amazon US",
+            "card_amount": "25", "card_currency": "USD", "quantity": 1,
+            "payment_method": "wallet"}, format="json")
+        order = BillOrder.objects.get()
+        assert quote["price_ngn"] == "40800.00"                       # +2% JobCatch margin
+        assert resp.json()["amount"] == "40800.00"
+        buy = [c for c in fake.calls if c["path"] == "/gift-cards/buy"][0]
+        assert buy["payload"] == {"product_id": 7, "amount": 25.0, "quantity": 1,
+                                  "expected_amount_ngn": 40000.0}
+        requery = __import__("apps.billing.services", fromlist=["requery_order"]).requery_order
+        requery(order)
+    body = client.get(f"/api/v1/billing/orders/{order.id}/").json()
+    assert body["status"] == "successful" and body["epins"][0]["pin"] == "AMZN-1234-5678"
+    assert "expected_amount_ngn" not in body["details"]               # cost price stays private
+
+
+RMB_RATES = (200, {"data": {"channels": [
+    {"channel": "alipay", "name": "Alipay", "is_available": True, "rates": [],
+     "account_types": [{"type": "nigerian", "name": "Nigerian", "is_available": True,
+                        "rates": [{"min_rmb": 100, "max_rmb": None, "ngn_per_rmb": 210}]}]},
+    {"channel": "bank", "name": "Bank", "is_available": True, "account_types": [],
+     "rates": [{"min_rmb": 100, "max_rmb": None, "ngn_per_rmb": 215}]}],
+    "limits": {"min_rmb": 100, "max_rmb": 50000, "currency": "CNY"}}})
+
+
+@override_settings(BILL_RMB_ENABLED=True, RMB_MARGIN_PERCENT=Decimal("2"))
+def test_rmb_alipay_order_sends_qr_code(client, user):
+    from django.core.files.uploadedfile import SimpleUploadedFile
+
+    _fund(user, 200000)
+    client.force_authenticate(user)
+    created = (201, {"message": "submitted", "data": {
+        "reference": "RMB1", "channel": "alipay", "rmb_amount": 500, "exchange_rate": 210,
+        "ngn_amount": {"raw": 105000}, "status": "processing",
+        "transaction": _tx("processing", reference="RMB1")}})
+    fake = FakeVTU({"GET /rmb/buy/rates": RMB_RATES, "POST /rmb/buy": created})
+    qr = SimpleUploadedFile("qr.png", b"\x89PNG\r\n\x1a\nfake", content_type="image/png")
+    with patch.object(VTUClient, "_raw", fake):
+        quote = client.post("/api/v1/billing/rmb/", {"channel": "alipay", "account_type": "nigerian",
+                                                     "rmb_amount": "500"}, format="json").json()
+        resp = client.post("/api/v1/billing/orders/", {
+            "service": "rmb", "channel": "alipay", "account_type": "nigerian", "rmb_amount": "500",
+            "recipient_name": "Zhang Wei", "description": "Invoice #2026-0045 for phone parts",
+            "qr_code": qr, "payment_method": "wallet"}, format="multipart")
+    assert quote["price_ngn"] == "107100.00"                          # 500 × 210 + 2%
+    assert resp.status_code == 201, resp.json()
+    assert resp.json()["amount"] == "107100.00" and resp.json()["status"] == "processing"
+    post = [c for c in fake.calls if c["path"] == "/rmb/buy"][0]
+    assert post["payload"]["alipay_account_type"] == "nigerian"
+    assert post["payload"]["rmb_amount"] == "500.00"
+    order = BillOrder.objects.get()
+    assert order.provider_order_id == "RMB1" and order.attachment
+    assert "ngn_per_rmb" not in resp.json()["details"]
+
+
+@override_settings(BILL_RMB_ENABLED=True)
+def test_rmb_requires_qr_for_alipay(client, user):
+    _fund(user, 200000)
+    client.force_authenticate(user)
+    with patch.object(VTUClient, "_raw", FakeVTU({"GET /rmb/buy/rates": RMB_RATES})):
+        resp = client.post("/api/v1/billing/orders/", {
+            "service": "rmb", "channel": "alipay", "account_type": "nigerian", "rmb_amount": "500",
+            "recipient_name": "Zhang Wei", "description": "Invoice 45", "payment_method": "wallet"},
+            format="json")
+    assert resp.status_code == 400 and "qr_code" in resp.json()
+
+
+@override_settings(BILL_GIFTCARD_SELL_ENABLED=True, GIFTCARD_SELL_MARGIN_PERCENT=Decimal("5"))
+def test_giftcard_sale_approved_credits_wallet_once(client, user):
+    from apps.billing.models import GiftCardTrade
+
+    client.force_authenticate(user)
+    submitted = (201, {"message": "submitted", "data": {
+        "reference": "GCS1", "card_name": "Amazon", "payout_amount": {"raw": 100000},
+        "status": "pending",
+        "transaction": {**_tx("pending", reference="GCS1"), "amount": {"raw": 100000}}}})
+    with patch.object(VTUClient, "_raw", FakeVTU({"POST /gift-cards/sell": submitted})):
+        resp = client.post("/api/v1/billing/giftcards/trades/", {
+            "slug": "amazon", "card_name": "Amazon", "card_country": "US", "card_type": "ecode",
+            "card_currency": "USD", "card_amount": "100", "code": "AQ8BNC7X2P1234"}, format="json")
+    assert resp.status_code == 201, resp.json()
+    assert resp.json()["status"] == "pending" and resp.json()["expected_payout"] == "95000.00"
+    assert "code" not in resp.json()
+    event = {"id": "e", "event": "transaction.completed", "livemode": True,
+             "data": {"object": "transaction", "reference": "GCS1", "status": "completed"}}
+    lookup = FakeVTU({"GET /transactions/GCS1": (200, {"data": {
+        **_tx("completed", reference="GCS1"), "amount": {"raw": 100000}}})})
+    with patch.object(VTUClient, "_raw", lookup):
+        _webhook(client, event)
+        _webhook(client, event)
+    trade = GiftCardTrade.objects.get()
+    assert trade.status == "completed" and trade.user_payout == Decimal("95000.00")
+    assert Wallet.objects.get(user=user).balance == Decimal("95000.00")
+
+
+@override_settings(BILL_GIFTCARD_SELL_ENABLED=True)
+def test_giftcard_sale_declined(client, user):
+    from apps.billing.models import GiftCardTrade
+
+    client.force_authenticate(user)
+    submitted = (201, {"data": {"reference": "GCS2", "payout_amount": {"raw": 50000},
+                                "transaction": _tx("pending", reference="GCS2")}})
+    with patch.object(VTUClient, "_raw", FakeVTU({"POST /gift-cards/sell": submitted})):
+        client.post("/api/v1/billing/giftcards/trades/", {
+            "slug": "steam", "card_country": "US", "card_type": "ecode", "card_currency": "USD",
+            "card_amount": "50", "code": "8K2P9M4G7X51234"}, format="json")
+    lookup = FakeVTU({"GET /transactions/GCS2": (200, {"data": {
+        **_tx("cancelled", reference="GCS2"), "cancellation_reason": "Code already redeemed"}})})
+    with patch.object(VTUClient, "_raw", lookup):
+        _webhook(client, {"id": "e", "event": "transaction.cancelled", "livemode": True,
+                          "data": {"object": "transaction", "reference": "GCS2", "status": "cancelled"}})
+    trade = GiftCardTrade.objects.get()
+    assert trade.status == "cancelled" and trade.rejection_reason == "Code already redeemed"
+    assert not WalletTransaction.objects.filter(source="giftcard_sale").exists()

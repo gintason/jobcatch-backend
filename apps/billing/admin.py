@@ -1,7 +1,7 @@
 from django.contrib import admin, messages
 
 from . import services
-from .models import BillOrder, BillStatus, Wallet, WalletTransaction
+from .models import BillOrder, BillStatus, Wallet, WalletTransaction, GiftCardTrade
 
 
 @admin.register(BillOrder)
@@ -59,3 +59,24 @@ class WalletTransactionAdmin(admin.ModelAdmin):
 
     def has_delete_permission(self, request, obj=None):
         return False
+
+
+@admin.register(GiftCardTrade)
+class GiftCardTradeAdmin(admin.ModelAdmin):
+    list_display = ("created_at", "user", "card_name", "card_currency", "card_amount",
+                    "expected_payout", "user_payout", "status")
+    list_filter = ("status", "card_type", "created_at")
+    search_fields = ("request_id", "provider_reference", "user__email", "slug")
+    readonly_fields = [f.name for f in GiftCardTrade._meta.fields if f.name != "code"]
+    exclude = ("code",)            # redemption codes are never shown again after submission
+    actions = ("requery_selected",)
+    date_hierarchy = "created_at"
+
+    def has_add_permission(self, request):
+        return False
+
+    @admin.action(description="↻ Check status with VTU.ng (credits the wallet if approved)")
+    def requery_selected(self, request, queryset):
+        for trade in queryset:
+            services.requery_trade(trade)
+        self.message_user(request, "Checked selected trades.", messages.SUCCESS)

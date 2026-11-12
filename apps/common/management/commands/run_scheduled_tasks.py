@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 def _steps():
-    from apps.billing.services import requery_stale_orders
+    from apps.billing.services import requery_stale_orders, requery_stale_trades
     from apps.engagement.services import send_upgrade_nudges
     from apps.listings.services import expire_listings
     from apps.payments.services import reconcile_payments
@@ -26,6 +26,7 @@ def _steps():
     return [
         ("reconcile_payments", reconcile_payments),
         ("requery_bill_orders", requery_stale_orders),
+        ("requery_giftcard_trades", requery_stale_trades),
         ("expire_job_listings", expire_listings),
         ("expire_subscriptions", expire_subscriptions),
         ("renewal_reminders", send_renewal_reminders),

@@ -33,10 +33,12 @@ from apps.accounts.throttles import OTPThrottle
 from apps.payments.services import CheckoutError
 
 from . import services
-from .models import BillOrder
+from .models import BillOrder, GiftCardTrade
 from .serializers import (
     BillOrderCreateSerializer,
     BillOrderSerializer,
+    GiftCardTradeCreateSerializer,
+    GiftCardTradeSerializer,
     TopupSerializer,
     VerifyCustomerSerializer,
     WalletSerializer,
@@ -58,14 +60,18 @@ class VariationsView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request, kind):
-        if kind not in ("data", "tv"):
+        if kind not in ("data", "tv", "education"):
             return Response({"detail": "Unknown plan type."}, status=status.HTTP_404_NOT_FOUND)
         provider = (request.query_params.get("provider") or "").lower()
-        allowed = services.DATA_NETWORKS if kind == "data" else services.TV_PROVIDERS
-        if provider not in allowed:
+        service_type = request.query_params.get("service_type") or None
+        allowed = {"data": services.DATA_NETWORKS, "tv": services.TV_PROVIDERS,
+                   "education": services.EDUCATION_PROVIDERS}[kind]
+        if provider not in allowed or (kind == "education" and (
+                not settings.BILL_EDUCATION_ENABLED
+                or service_type not in services.EDUCATION_SERVICE_TYPES)):
             return Response({"detail": "Choose a provider."}, status=status.HTTP_400_BAD_REQUEST)
         try:
-            items = services.plans(kind, provider)
+            items = services.plans(kind, provider, service_type)
         except (VTUUnknown, VTUFailed):
             return Response({"detail": "Plans are temporarily unavailable."},
                             status=status.HTTP_503_SERVICE_UNAVAILABLE)
@@ -82,8 +88,100 @@ class VerifyCustomerView(APIView):
         d = ser.validated_data
         info = services.verify_customer(service=d["service"], provider=d["provider"],
                                         customer_id=d["customer_id"],
-                                        meter_type=d.get("meter_type"))
+                                        meter_type=d.get("meter_type"),
+                                        variation_code=d.get("variation_id"))
         return Response({k: v for k, v in info.items() if v not in (None, "")})
+
+
+def _vtu_list(fetch):
+    try:
+        return Response(fetch())
+    except (VTUUnknown, VTUFailed):
+        return Response({"detail": "This service is temporarily unavailable."},
+                        status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+
+class GiftCardCatalogView(APIView):
+    """GET countries | products?country_code= | sell-catalog | sell-rates?slug="""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, what):
+        q = request.query_params
+        client = VTUClient()
+        if what in ("countries", "products"):
+            if not settings.BILL_GIFTCARD_BUY_ENABLED:
+                return Response({"detail": "Not available."}, status=status.HTTP_404_NOT_FOUND)
+            if what == "countries":
+                return _vtu_list(client.giftcard_countries)
+            return _vtu_list(lambda: client.giftcard_products((q.get("country_code") or "US").upper()[:2]))
+        if what in ("sell-catalog", "sell-rates"):
+            if not settings.BILL_GIFTCARD_SELL_ENABLED:
+                return Response({"detail": "Not available."}, status=status.HTTP_404_NOT_FOUND)
+            if what == "sell-catalog":
+                return _vtu_list(client.giftcard_sell_catalog)
+            resp = _vtu_list(lambda: client.giftcard_sell_rates(q.get("slug") or ""))
+            if resp.status_code == 200:
+                resp.data = {"rates": resp.data,
+                             "jobcatch_margin_percent": str(settings.GIFTCARD_SELL_MARGIN_PERCENT)}
+            return resp
+        return Response({"detail": "Unknown."}, status=status.HTTP_404_NOT_FOUND)
+
+
+class GiftCardQuoteView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        q = services.giftcard_quote(product_id=request.data.get("product_id"),
+                                    amount=request.data.get("amount"),
+                                    quantity=request.data.get("quantity"))
+        return Response({"price_ngn": str(q["price_ngn"]), "quantity": q["quantity"]})
+
+
+class RmbView(APIView):
+    """GET rates/limits for the form; POST a quote for {channel, account_type, rmb_amount}."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        if not settings.BILL_RMB_ENABLED:
+            return Response({"detail": "Not available."}, status=status.HTTP_404_NOT_FOUND)
+        try:
+            data = VTUClient().rmb_rates()
+        except (VTUUnknown, VTUFailed):
+            return Response({"detail": "RMB rates are temporarily unavailable."},
+                            status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        channels = [{"channel": c.get("channel"), "name": c.get("name"),
+                     "is_available": c.get("is_available", True),
+                     "account_types": [{"type": a.get("type"), "name": a.get("name"),
+                                        "is_available": a.get("is_available", True)}
+                                       for a in c.get("account_types") or []]}
+                    for c in data.get("channels") or [] if c.get("channel") in services.RMB_CHANNELS]
+        return Response({"channels": channels, "limits": data.get("limits") or {}})
+
+    def post(self, request):
+        q = services.rmb_quote(channel=request.data.get("channel"),
+                               account_type=request.data.get("account_type"),
+                               rmb_amount=request.data.get("rmb_amount"))
+        return Response({"rmb_amount": str(q["rmb_amount"]), "rate": str(q["customer_rate"]),
+                         "price_ngn": str(q["price_ngn"])})
+
+
+class GiftCardTradeViewSet(mixins.CreateModelMixin, viewsets.ReadOnlyModelViewSet):
+    """Selling gift cards: submit (multipart for physical-card photos) and track."""
+
+    permission_classes = [IsAuthenticated]
+    serializer_class = GiftCardTradeSerializer
+
+    def get_queryset(self):
+        return GiftCardTrade.objects.filter(user=self.request.user)
+
+    def create(self, request, *args, **kwargs):
+        ser = GiftCardTradeCreateSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        trade = services.submit_giftcard_trade(user=request.user, data=ser.validated_data,
+                                               images=request.FILES.getlist("images"))
+        return Response(GiftCardTradeSerializer(trade).data, status=status.HTTP_201_CREATED)
 
 
 class BillOrderViewSet(mixins.CreateModelMixin, viewsets.ReadOnlyModelViewSet):
@@ -188,6 +286,10 @@ class VTUWebhookView(APIView):
             return Response({"status": "ignored"})
         reference = data.get("reference") or data.get("transaction_reference")
         order = BillOrder.objects.filter(provider_order_id=reference).first() if reference else None
+        trade = (GiftCardTrade.objects.filter(provider_reference=reference).first()
+                 if reference and not order else None)
+        if trade:
+            return self._trade(trade, reference, data)
         if not order:
             logger.warning("VTU webhook %s for unknown reference %s", payload.get("event"), reference)
             return Response({"status": "ignored"})
@@ -202,5 +304,18 @@ class VTUWebhookView(APIView):
                 logger.warning("VTU webhook %s: lookup failed (%s); requery will retry",
                                reference, exc)
                 return Response({"status": "retry"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
-            services.apply_biller_status(order, result.transaction, source="webhook")
+            services.apply_biller_status(order, result.transaction, source="lookup")
+        return Response({"status": "success"})
+
+    def _trade(self, trade, reference, data):
+        if is_sandbox():
+            services.apply_trade_status(trade, {**data, "reference": reference,
+                                                "status": data.get("status") or ""},
+                                        source="webhook")
+            return Response({"status": "success"})
+        try:
+            result = VTUClient().get_transaction(reference=reference)
+        except (VTUFailed, VTUUnknown):
+            return Response({"status": "retry"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        services.apply_trade_status(trade, result.transaction, source="lookup")
         return Response({"status": "success"})

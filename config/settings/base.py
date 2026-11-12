@@ -299,10 +299,25 @@ BILL_SERVICE_FEES = {
     "tv": Decimal(env("BILL_FEE_TV", default="0")),
     "epins": Decimal(env("BILL_FEE_EPINS", default="0")),
     "betting": Decimal(env("BILL_FEE_BETTING", default="0")),
+    "education": Decimal(env("BILL_FEE_EDUCATION", default="0")),
+    "giftcard": Decimal(env("BILL_FEE_GIFTCARD", default="0")),
+    "rmb": Decimal(env("BILL_FEE_RMB", default="0")),
 }
 # Betting-wallet funding can be switched off without a deploy (e.g. if a
 # payment provider's terms don't allow it).
 BILL_BETTING_ENABLED = env.bool("BILL_BETTING_ENABLED", default=True)
+BILL_EDUCATION_ENABLED = env.bool("BILL_EDUCATION_ENABLED", default=True)
+# Gift cards and RMB need VTU.ng business verification (KYB) and are money-
+# transfer / FX style services: keep them OFF until KYB is approved and your
+# payment providers have confirmed in writing that they allow them.
+BILL_GIFTCARD_BUY_ENABLED = env.bool("BILL_GIFTCARD_BUY_ENABLED", default=False)
+BILL_GIFTCARD_SELL_ENABLED = env.bool("BILL_GIFTCARD_SELL_ENABLED", default=False)
+BILL_RMB_ENABLED = env.bool("BILL_RMB_ENABLED", default=False)
+# JobCatch's margin, in percent, on top of VTU.ng's price (buying) or kept from
+# VTU.ng's payout (selling gift cards).
+GIFTCARD_BUY_MARGIN_PERCENT = Decimal(env("GIFTCARD_BUY_MARGIN_PERCENT", default="2"))
+GIFTCARD_SELL_MARGIN_PERCENT = Decimal(env("GIFTCARD_SELL_MARGIN_PERCENT", default="5"))
+RMB_MARGIN_PERCENT = Decimal(env("RMB_MARGIN_PERCENT", default="2"))
 WALLET_MIN_TOPUP = Decimal("100")
 WALLET_MAX_TOPUP = Decimal("500000")
 

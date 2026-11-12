@@ -20,6 +20,7 @@ treat them differently —
 import base64
 import json
 import logging
+import uuid
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -40,7 +41,12 @@ PURCHASE_PATHS = {
     "tv": "/bills/cable-tv",
     "epins": "/bills/epin",
     "betting": "/bills/bet-funding",
+    "education": "/bills/education",
+    "giftcard": "/gift-cards/buy",
+    "rmb": "/rmb/buy",
 }
+# `?type=` for looking a purchase up by its Idempotency-Key.
+TRANSACTION_TYPES = {"giftcard": "gift_card_buy", "rmb": "rmb_buy", "giftcard_sell": "gift_card_sell"}
 
 # HTTP statuses after which we know no transaction was created.
 DEFINITE_FAILURE_STATUSES = {400, 401, 402, 403, 404, 422}
@@ -87,6 +93,34 @@ def is_sandbox():
     return "sandbox." in settings.VTU_BASE_URL
 
 
+def _multipart(fields, files):
+    boundary = f"----JobCatch{uuid.uuid4().hex}"
+    out = bytearray()
+    for name, value in fields.items():
+        if value is None:
+            continue
+        out += (f"--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n"
+                f"{value}\r\n").encode()
+    for name, filename, content, ctype in files:
+        out += (f"--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"; "
+                f"filename=\"{filename}\"\r\nContent-Type: {ctype}\r\n\r\n").encode()
+        out += content + b"\r\n"
+    out += f"--{boundary}--\r\n".encode()
+    return bytes(out), f"multipart/form-data; boundary={boundary}"
+
+
+def _transaction_of(body):
+    """Bills return {"transaction": ...}; RMB and gift-card sells return {"data": {..., "transaction": ...}}."""
+    if not isinstance(body, dict):
+        return None
+    if isinstance(body.get("transaction"), dict):
+        return body["transaction"]
+    data = body.get("data")
+    if isinstance(data, dict) and isinstance(data.get("transaction"), dict):
+        return {**data["transaction"], "order": {k: v for k, v in data.items() if k != "transaction"}}
+    return None
+
+
 def _error(body):
     err = (body or {}).get("error") if isinstance(body, dict) else None
     if isinstance(err, dict):
@@ -99,8 +133,12 @@ class VTUClient:
         self.base = settings.VTU_BASE_URL.rstrip("/")
 
     # ------------------------------------------------------------ transport
-    def _raw(self, method, path, payload=None, params=None, idempotency_key=None, timeout=45):
-        """Returns (http_status, parsed_json_body). Raises VTUUnknown on network errors."""
+    def _raw(self, method, path, payload=None, params=None, idempotency_key=None, timeout=45,
+             files=None):
+        """
+        Returns (http_status, parsed_json_body). Raises VTUUnknown on network errors.
+        `files` = [(field, filename, bytes, content_type)] sends multipart/form-data.
+        """
         if not settings.VTU_API_KEY:
             raise VTUNotConfigured("Bill payments are not configured yet.", code="not_configured")
         url = f"{self.base}{path}"
@@ -109,7 +147,9 @@ class VTUClient:
         headers = {"Accept": "application/json", "User-Agent": "JobCatch/1.0",
                    "Authorization": f"Bearer {settings.VTU_API_KEY}"}
         data = None
-        if payload is not None:
+        if files:
+            data, headers["Content-Type"] = _multipart(payload or {}, files)
+        elif payload is not None:
             headers["Content-Type"] = "application/json"
             data = json.dumps(payload).encode()
         if idempotency_key:
@@ -167,6 +207,55 @@ class VTUClient:
         return self._cached_list(f"vtu1:cable:{provider}", "/bills/cable-packages",
                                  {"provider": provider})
 
+    def education_plans(self, provider, service_type):
+        """[{variation_code, name, amount, fixed_price}]"""
+        return self._cached_list(f"vtu1:edu:{provider}:{service_type}", "/bills/education-plans",
+                                 {"provider": provider, "service_type": service_type})
+
+    def giftcard_countries(self):
+        return self._cached_list("vtu1:gc-countries", "/gift-cards/buy/countries", None)
+
+    def giftcard_products(self, country_code):
+        return self._cached_list(f"vtu1:gc-products:{country_code}", "/gift-cards/buy/products",
+                                 {"country_code": country_code})
+
+    def giftcard_price(self, *, product_id, amount, quantity):
+        """VTU.ng's NGN price (cached 90 s per product/amount/quantity, as their docs ask)."""
+        key = f"vtu1:gc-price:{product_id}:{amount}:{quantity}"
+        cached = cache.get(key)
+        if cached is not None:
+            return cached
+        status, body = self._raw("POST", "/gift-cards/buy/calculate", {
+            "product_id": product_id, "amount": amount, "quantity": quantity})
+        if status != 200:
+            code, message = _error(body)
+            raise VTUFailed(message or "That card amount isn't available.", code=code,
+                            http_status=status, body=body)
+        data = body.get("data") or {}
+        cache.set(key, data, 90)
+        return data
+
+    def giftcard_sell_catalog(self):
+        return self._cached_list("vtu1:gc-sell-catalog", "/gift-cards/sell/catalog", None)
+
+    def giftcard_sell_rates(self, slug):
+        return self._cached_list(f"vtu1:gc-sell-rates:{slug}", "/gift-cards/sell/rates",
+                                 {"slug": slug})
+
+    def rmb_rates(self):
+        key = "vtu1:rmb-rates"
+        cached = cache.get(key)
+        if cached is not None:
+            return cached
+        data = self._get("/rmb/buy/rates").get("data") or {}
+        cache.set(key, data, 120)
+        return data
+
+    def verify_jamb(self, *, profile_id, variation_code):
+        body = self._verify("/bills/education/verify-jamb", {
+            "profile_id": profile_id, "variation_code": variation_code})
+        return body.get("verification") or {}
+
     def wallet(self):
         return self._get("/wallet").get("data") or []
 
@@ -187,11 +276,11 @@ class VTUClient:
         return body.get("validation") or {}
 
     # ------------------------------------------------------------ purchases
-    def purchase(self, service, payload, *, idempotency_key):
+    def purchase(self, service, payload, *, idempotency_key, files=None, path=None):
         """POST a purchase and classify the outcome (see module docstring)."""
-        status, body = self._raw("POST", PURCHASE_PATHS[service], payload,
-                                 idempotency_key=idempotency_key)
-        tx = body.get("transaction") if isinstance(body, dict) else None
+        status, body = self._raw("POST", path or PURCHASE_PATHS.get(service, ""), payload,
+                                 idempotency_key=idempotency_key, files=files)
+        tx = _transaction_of(body)
         if status in (200, 201) and isinstance(tx, dict):
             return VTUResult(tx)
         code, message = _error(body)
@@ -201,14 +290,15 @@ class VTUClient:
         raise VTUUnknown(message or f"Unexpected biller response ({status}).", code=code,
                          http_status=status, body=body)
 
-    def get_transaction(self, *, reference=None, idempotency_key=None):
+    def get_transaction(self, *, reference=None, idempotency_key=None, service=None):
         """
         Look a purchase up by VTU.ng's reference, or by our Idempotency-Key when we
         never got the reference back. VTUFailed(code="not_found") if it doesn't exist.
         """
         params = None
         if not reference:
-            reference, params = idempotency_key, {"type": "bill_payment"}
+            reference = idempotency_key
+            params = {"type": TRANSACTION_TYPES.get(service, "bill_payment")}
         status, body = self._raw("GET", f"/transactions/{urllib.parse.quote(reference)}",
                                  params=params)
         if status == 200:

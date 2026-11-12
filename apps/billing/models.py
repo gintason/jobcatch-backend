@@ -15,6 +15,15 @@ from django.conf import settings
 from django.db import models
 
 from apps.common.models import BaseModel
+from apps.common.storage import private_storage
+
+
+def bill_attachment_upload_to(instance, filename):
+    import os
+    import uuid
+
+    ext = os.path.splitext(filename)[1].lower()[:10]
+    return f"bill-attachments/{instance.user_id}/{uuid.uuid4().hex}{ext}"
 
 
 class Wallet(BaseModel):
@@ -41,6 +50,7 @@ class TxnSource(models.TextChoices):
     BILL = "bill", "Bill payment"
     REFUND = "refund", "Refund"
     ADJUSTMENT = "adjustment", "Admin adjustment"
+    GIFTCARD_SALE = "giftcard_sale", "Gift card sale"
 
 
 class WalletTransaction(BaseModel):
@@ -69,6 +79,9 @@ class BillService(models.TextChoices):
     TV = "tv", "Cable TV"
     EPINS = "epins", "Recharge card PINs"
     BETTING = "betting", "Betting wallet funding"
+    EDUCATION = "education", "Exam PINs (WAEC / JAMB)"
+    GIFTCARD = "giftcard", "Gift card"
+    RMB = "rmb", "RMB payment (China)"
 
 
 class PaymentMethod(models.TextChoices):
@@ -119,6 +132,14 @@ class BillOrder(BaseModel):
     # the buyer (orders are scoped to their owner).
     quantity = models.PositiveSmallIntegerField(default=1)
     epins = models.JSONField(default=list, blank=True)
+    # education: result_checker | registration | jamb
+    service_type = models.CharField(max_length=30, blank=True)
+    # Service-specific inputs and quotes, e.g. RMB recipient + rate, gift card
+    # product + VTU.ng's NGN price.
+    details = models.JSONField(default=dict, blank=True)
+    # RMB: the recipient's Alipay / WeChat receive QR code (private).
+    attachment = models.FileField(storage=private_storage, upload_to=bill_attachment_upload_to,
+                                  null=True, blank=True, max_length=255)
     response = models.JSONField(default=dict, blank=True)
 
     sent_at = models.DateTimeField(null=True, blank=True)
@@ -134,3 +155,53 @@ class BillOrder(BaseModel):
     @property
     def receipt_number(self):
         return f"JCB-{self.created_at:%Y%m%d}-{str(self.id)[:8].upper()}"
+
+
+class GiftCardTradeStatus(models.TextChoices):
+    SUBMITTING = "submitting", "Submitting"
+    PENDING = "pending", "Under review"
+    COMPLETED = "completed", "Paid to wallet"
+    CANCELLED = "cancelled", "Declined"
+    FAILED = "failed", "Not submitted"
+
+
+def giftcard_image_upload_to(instance, filename):
+    import os
+    import uuid
+
+    ext = os.path.splitext(filename)[1].lower()[:10]
+    return f"giftcard-trades/{instance.user_id}/{uuid.uuid4().hex}{ext}"
+
+
+class GiftCardTrade(BaseModel):
+    """
+    A customer selling a gift card. VTU.ng reviews it; when they approve, the
+    payout (less JobCatch's margin) is credited to the customer's JobCatch wallet.
+    """
+
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+                             related_name="giftcard_trades")
+    request_id = models.CharField(max_length=50, unique=True)
+    slug = models.CharField(max_length=60)
+    card_name = models.CharField(max_length=120, blank=True)
+    card_country = models.CharField(max_length=4)
+    specific_country = models.CharField(max_length=60, blank=True)
+    card_type = models.CharField(max_length=10)               # ecode | physical
+    sub_type = models.CharField(max_length=40, blank=True)
+    card_currency = models.CharField(max_length=3)
+    card_amount = models.DecimalField(max_digits=12, decimal_places=2)
+    # The redemption code (e-codes). Shown to nobody after submission.
+    code = models.CharField(max_length=200, blank=True)
+    images = models.JSONField(default=list, blank=True)       # private storage paths
+    expected_payout = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
+    provider_payout = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
+    user_payout = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
+    status = models.CharField(max_length=12, choices=GiftCardTradeStatus.choices,
+                              default=GiftCardTradeStatus.SUBMITTING, db_index=True)
+    provider_reference = models.CharField(max_length=40, blank=True, db_index=True)
+    rejection_reason = models.CharField(max_length=255, blank=True)
+    response = models.JSONField(default=dict, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    def __str__(self):
+        return f"{self.card_name or self.slug} {self.card_currency} {self.card_amount} · {self.status}"

@@ -71,6 +71,9 @@ All are optional with safe defaults. See `.env.example` for the full list.
 | `VTU_API_KEY` | — | **Secret** key from app.vtu.ng → Profile → Developer (`vtu_sk_live_…`, or `vtu_sk_test_…` for sandbox). Keys only work against their own environment |
 | `VTU_WEBHOOK_TOKEN` | — | Long random string; it's the last part of the webhook URL |
 | `BILL_FEE_AIRTIME` … `BILL_FEE_TV`, `BILL_FEE_EPINS`, `BILL_FEE_BETTING` | `0` | Optional flat convenience fee per purchase |
+| `BILL_EDUCATION_ENABLED` | `True` | WAEC result checker / registration and JAMB PINs |
+| `BILL_GIFTCARD_BUY_ENABLED`, `BILL_GIFTCARD_SELL_ENABLED`, `BILL_RMB_ENABLED` | `False` | Gift card buying/selling and RMB (China) payments. Need VTU.ng **KYB**; turn on only after Paystack/Flutterwave confirm in writing they allow them. Gift card sale payouts go to the customer's JobCatch wallet (no bank withdrawals) |
+| `GIFTCARD_BUY_MARGIN_PERCENT`, `GIFTCARD_SELL_MARGIN_PERCENT`, `RMB_MARGIN_PERCENT` | `2`, `5`, `2` | JobCatch's margin on top of / taken from VTU.ng's price |
 | `BILL_BETTING_ENABLED` | `True` | `False` hides betting-wallet funding (tab, catalogue and API) without a deploy |
 | `COMPLAINTS_NOTIFY_EMAIL` | `info@jobcatchonline.com` | Support inbox copied on every new complaint |
 | `PRIVATE_MEDIA_ROOT` | `<RENDER_DISK_PATH>/_private` | KYC documents; never served by `/media/` |
