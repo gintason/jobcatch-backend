@@ -29,6 +29,7 @@ class UserRole(models.TextChoices):
     ARTISAN = "artisan", "Artisan"
     EMPLOYER = "employer", "Employer"
     JOB_SEEKER = "job_seeker", "Job Seeker"
+    RIDER = "rider", "Dispatch rider"
     ADMIN = "admin", "Admin"
 
 

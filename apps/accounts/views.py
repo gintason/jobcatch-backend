@@ -300,6 +300,7 @@ class SwitchRoleView(APIView):
         UserRole.ARTISAN,
         UserRole.EMPLOYER,
         UserRole.JOB_SEEKER,
+        UserRole.RIDER,
     }
 
     def post(self, request):

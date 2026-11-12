@@ -38,6 +38,7 @@ class PaymentPurpose(models.TextChoices):
     SEEKER_PRO = "seeker_pro", "Job seeker Pro plan"
     WALLET_TOPUP = "wallet_topup", "Wallet top-up"
     BILL_PAYMENT = "bill_payment", "Bill payment"
+    DELIVERY = "delivery", "Dispatch / delivery fee"
 
 
 def generate_invoice_number():

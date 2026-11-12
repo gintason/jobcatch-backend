@@ -89,17 +89,50 @@ class PaystackGateway(PaymentGateway):
     def _auth(self):
         return {"Authorization": f"Bearer {settings.PAYSTACK_SECRET_KEY}"}
 
-    def initialize(self, *, reference, amount, email, callback_url, name="", description=""):
+    def initialize(self, *, reference, amount, email, callback_url, name="", description="",
+                   split=None):
         resp = _post_json(
             f"{self.BASE}/transaction/initialize",
             {"email": email, "amount": int(Decimal(amount) * 100),
              "reference": reference, "callback_url": callback_url,
-             "metadata": {"description": description}},
+             "metadata": {"description": description},
+             # Split payments: Paystack settles the subaccount's share straight to
+             # its bank account and `transaction_charge` (kobo) to ours.
+             **({"subaccount": split["subaccount"],
+                 "transaction_charge": int(Decimal(split["platform_amount"]) * 100),
+                 "bearer": split.get("bearer", "account")} if split else {})},
             self._auth,
         )
         data = resp.get("data", {})
         return {"authorization_url": data.get("authorization_url"),
                 "reference": data.get("reference", reference)}
+
+    # ---- split payments (riders' payout accounts) ----
+    def list_banks(self):
+        resp = _get_json(f"{self.BASE}/bank?country=nigeria&perPage=200", self._auth)
+        return [{"name": b["name"], "code": b["code"]} for b in resp.get("data") or []
+                if b.get("active", True) and b.get("code")]
+
+    def resolve_account(self, *, account_number, bank_code):
+        """The registered account name, or GatewayError if the account doesn't exist."""
+        resp = _get_json(f"{self.BASE}/bank/resolve?account_number="
+                         f"{urllib.parse.quote(account_number)}&bank_code={urllib.parse.quote(bank_code)}",
+                         self._auth)
+        name = (resp.get("data") or {}).get("account_name")
+        if not resp.get("status") or not name:
+            raise GatewayError(resp.get("message") or "Account not found")
+        return name
+
+    def create_subaccount(self, *, business_name, bank_code, account_number, percentage_charge,
+                          description=""):
+        resp = _post_json(f"{self.BASE}/subaccount", {
+            "business_name": business_name[:100], "settlement_bank": bank_code,
+            "account_number": account_number, "percentage_charge": float(percentage_charge),
+            "description": description[:200]}, self._auth)
+        code = (resp.get("data") or {}).get("subaccount_code")
+        if not resp.get("status") or not code:
+            raise GatewayError(resp.get("message") or "Could not create the payout account")
+        return code
 
     def verify(self, reference):
         resp = _get_json(
@@ -156,7 +189,10 @@ class FlutterwaveGateway(PaymentGateway):
     def _auth(self):
         return {"Authorization": f"Bearer {settings.FLUTTERWAVE_SECRET_KEY}"}
 
-    def initialize(self, *, reference, amount, email, callback_url, name="", description=""):
+    def initialize(self, *, reference, amount, email, callback_url, name="", description="",
+                   split=None):
+        if split:
+            raise GatewayError("Split payments are only set up on Paystack.")
         resp = _post_json(
             f"{self.BASE}/payments",
             {

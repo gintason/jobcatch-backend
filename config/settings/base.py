@@ -64,6 +64,7 @@ LOCAL_APPS = [
     "apps.billing",
     "apps.engagement",
     "apps.complaints",
+    "apps.dispatch",
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
@@ -318,6 +319,16 @@ BILL_RMB_ENABLED = env.bool("BILL_RMB_ENABLED", default=False)
 GIFTCARD_BUY_MARGIN_PERCENT = Decimal(env("GIFTCARD_BUY_MARGIN_PERCENT", default="2"))
 GIFTCARD_SELL_MARGIN_PERCENT = Decimal(env("GIFTCARD_SELL_MARGIN_PERCENT", default="5"))
 RMB_MARGIN_PERCENT = Decimal(env("RMB_MARGIN_PERCENT", default="2"))
+# --- Dispatch & delivery ---
+# Delivery fees are paid in the app at pickup and split by Paystack: the rider's
+# share settles to their bank, the rest to JobCatch. Only Paystack does splits.
+DISPATCH_GATEWAY = "paystack"
+DISPATCH_RIDER_SHARE_PERCENT = Decimal(env("DISPATCH_RIDER_SHARE_PERCENT", default="80"))
+DISPATCH_MATCH_RADIUS_KM = int(env("DISPATCH_MATCH_RADIUS_KM", default="10"))
+DISPATCH_ROAD_FACTOR = Decimal(env("DISPATCH_ROAD_FACTOR", default="1.3"))   # straight line -> road
+DISPATCH_REQUEST_TTL_MINUTES = int(env("DISPATCH_REQUEST_TTL_MINUTES", default="45"))
+DISPATCH_MAX_DISTANCE_KM = int(env("DISPATCH_MAX_DISTANCE_KM", default="80"))
+
 WALLET_MIN_TOPUP = Decimal("100")
 WALLET_MAX_TOPUP = Decimal("500000")
 

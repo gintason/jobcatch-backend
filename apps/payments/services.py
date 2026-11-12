@@ -48,7 +48,7 @@ def log_event(payment, kind, *, source="", note="", payload=None):
 
 
 def start_checkout(*, user, purpose, amount, description, gateway=None,
-                   metadata=None, booking=None, before_gateway=None):
+                   metadata=None, booking=None, before_gateway=None, split=None, commission=None):
     """
     Create an INITIATED payment and ask the gateway for a hosted checkout URL.
 
@@ -66,7 +66,8 @@ def start_checkout(*, user, purpose, amount, description, gateway=None,
         payment = Payment.objects.create(
             payer=user, purpose=purpose, booking=booking, gateway=gateway,
             reference=new_reference(), amount=amount,
-            commission=compute_commission(purpose, amount),
+            commission=(commission if commission is not None
+                        else compute_commission(purpose, amount)),
             status=PaymentStatus.INITIATED,
             description=description[:255], metadata=metadata or {},
         )
@@ -78,6 +79,7 @@ def start_checkout(*, user, purpose, amount, description, gateway=None,
             reference=payment.reference, amount=amount, email=user.email,
             callback_url=settings.PAYMENT_CALLBACK_URL,
             name=getattr(user, "full_name", ""), description=description,
+            **({"split": split} if split else {}),
         )
     except GatewayError as exc:
         logger.error("Payment initialize failed [%s]: %s", payment.reference, exc)
@@ -181,6 +183,9 @@ def fulfill_payment(payment):
     elif purpose == PaymentPurpose.BILL_PAYMENT:
         from apps.billing.services import fulfill_bill_payment
         fulfill_bill_payment(payment)
+    elif purpose == PaymentPurpose.DELIVERY:
+        from apps.dispatch.services import fulfill_delivery_payment
+        fulfill_delivery_payment(payment)
     # BOOKING payments are recorded via the Payment row; no booking mutation needed.
 
 

@@ -140,3 +140,21 @@ and bill purchases are refunded with "not configured".
   The **Verified Artisan** badge is now granted by the paid application review.
 - Existing documents uploaded through the old Verification flow remain in public
   `/media/verifications/`; new KYC and artisan documents use private storage.
+
+
+## 8. Dispatch & delivery
+
+- **Customers** book at `/dispatch`: package delivery or food/errands, by bike, keke, car or van.
+  The fare is distance-based (base + per km, rounded to ₦50; errands add a surcharge). Edit the
+  prices in Django admin → **Delivery rates**.
+- **Riders** sign up at `/dashboard/rider`: vehicle, phone, government ID, then their bank
+  account, which is verified with Paystack and registered as a Paystack **subaccount**. Admins
+  approve riders in `/admin/reviews` → **Riders**.
+- **Flow:** a nearby online rider accepts → confirms pickup → the customer pays the fee in the
+  app → Paystack splits it (`DISPATCH_RIDER_SHARE_PERCENT`, default 80%, to the rider's bank; the
+  rest to JobCatch; Paystack's fee is taken from JobCatch's share) → the rider completes with the
+  recipient's 4-digit code. Unaccepted requests expire (scheduler step `expire_delivery_requests`).
+- **Requirements:** `PAYSTACK_SECRET_KEY` (live) on a Paystack account allowed to use **split
+  payments / subaccounts**. Tell Paystack about deliveries before launch.
+- For errands, the customer pays the rider for the items directly on delivery; only the delivery
+  fee goes through JobCatch.
