@@ -24,6 +24,8 @@ class BillOrderSerializer(serializers.ModelSerializer):
     receipt_number = serializers.CharField(read_only=True)
     payment_reference = serializers.CharField(source="payment.reference", read_only=True,
                                               default=None)
+    epins = serializers.SerializerMethodField()
+    epin_packs = serializers.SerializerMethodField()
 
     class Meta:
         model = BillOrder
@@ -31,8 +33,20 @@ class BillOrderSerializer(serializers.ModelSerializer):
                   "customer_name", "variation_id", "variation_label", "subscription_type",
                   "amount", "fee", "total", "payment_method", "payment_reference", "status",
                   "status_label", "request_id", "provider_order_id", "provider_message",
-                  "token", "units", "quantity", "epins", "created_at", "completed_at",
-                  "refunded_at")
+                  "token", "units", "quantity", "epins", "epin_packs", "created_at",
+                  "completed_at", "refunded_at")
+
+    def get_epins(self, obj):
+        """Text PINs (orders from the old VTU.ng API only)."""
+        return [e for e in (obj.epins or []) if isinstance(e, dict) and e.get("pin")]
+
+    def get_epin_packs(self, obj):
+        """Voucher packs (current API): each is a printable image of 10 cards."""
+        packs = [p for p in (obj.epins or []) if isinstance(p, dict) and p.get("file")]
+        return [{"index": i, "network": p.get("network"), "denomination": p.get("denomination"),
+                 "pieces_count": p.get("pieces_count"),
+                 "image_path": f"/billing/orders/{obj.id}/epin/{i}/"}
+                for i, p in enumerate(packs)]
 
 
 class BillOrderCreateSerializer(serializers.Serializer):
@@ -42,7 +56,7 @@ class BillOrderCreateSerializer(serializers.Serializer):
     # Not used for ePINs (they aren't sent to a phone or account).
     customer_id = serializers.CharField(max_length=40, required=False, allow_blank=True,
                                         default="")
-    quantity = serializers.IntegerField(required=False, min_value=1, max_value=40)
+    quantity = serializers.IntegerField(required=False, min_value=1, max_value=5)
     variation_id = serializers.CharField(max_length=40, required=False, allow_blank=True)
     amount = serializers.DecimalField(max_digits=12, decimal_places=2, required=False)
     subscription_type = serializers.ChoiceField(choices=["change", "renew"], required=False)

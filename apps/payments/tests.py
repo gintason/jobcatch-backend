@@ -46,6 +46,7 @@ def _booking(customer, artisan):
     )
 
 
+@override_settings(BOOKING_PAYMENTS_ENABLED=True)
 @patch("apps.payments.services.get_gateway")
 def test_initialize_booking_payment(mock_gateway, client):
     mock_gateway.return_value.initialize.return_value = {
@@ -83,6 +84,7 @@ def test_initialize_subscription_creates_inactive_sub(mock_gateway, client):
     assert sub.is_active is False               # activates only on webhook success
 
 
+@override_settings(BOOKING_PAYMENTS_ENABLED=True)
 def test_cannot_pay_for_someone_elses_booking(client):
     owner = _user("owner@x.com", "customer")
     artisan = _user("a3@x.com", "artisan")
@@ -146,3 +148,13 @@ def test_payment_history_scoped_to_payer(client):
     client.force_authenticate(u1)
     resp = client.get("/api/v1/payments/")
     assert resp.json()["count"] == 1                       # only own transactions
+
+
+def test_booking_payments_are_off_by_default(client):
+    customer = _user("c9@x.com", "customer")
+    artisan = _user("a9@x.com", "artisan")
+    booking = _booking(customer, artisan)
+    client.force_authenticate(customer)
+    res = client.post("/api/v1/payments/initialize/",
+                      {"purpose": "booking", "booking": str(booking.id)}, format="json")
+    assert res.status_code == 400 and "directly to the artisan" in str(res.data)

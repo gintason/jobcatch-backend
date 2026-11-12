@@ -11,14 +11,17 @@ Bill payments & wallet.
   POST /billing/wallet/fund/                -> top up by card/bank transfer
   (card payments for bills and top-ups always go through BILLING_GATEWAY,
    Flutterwave by default)
-  POST /billing/webhook/vtu/                -> VTU.ng status webhook (HMAC-SHA256 with PIN)
+  GET  /billing/orders/<id>/epin/<n>/       -> ePIN voucher pack image (owner only)
+  POST /billing/webhook/vtu/<token>/        -> VTU.ng webhook (a trigger only: every
+                                               event is re-checked with VTU.ng's API)
 """
-import hashlib
 import hmac
 import json
 import logging
+import mimetypes
 
 from django.conf import settings
+from django.http import FileResponse, Http404
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -39,7 +42,7 @@ from .serializers import (
     WalletSerializer,
     WalletTransactionSerializer,
 )
-from .vtu import VTUClient, VTUUnknown
+from .vtu import VTUClient, VTUFailed, VTUUnknown, is_sandbox
 
 logger = logging.getLogger(__name__)
 
@@ -57,14 +60,16 @@ class VariationsView(APIView):
     def get(self, request, kind):
         if kind not in ("data", "tv"):
             return Response({"detail": "Unknown plan type."}, status=status.HTTP_404_NOT_FOUND)
-        provider = request.query_params.get("provider") or None
+        provider = (request.query_params.get("provider") or "").lower()
+        allowed = services.DATA_NETWORKS if kind == "data" else services.TV_PROVIDERS
+        if provider not in allowed:
+            return Response({"detail": "Choose a provider."}, status=status.HTTP_400_BAD_REQUEST)
         try:
-            items = VTUClient().variations(kind, provider)
-        except VTUUnknown:
+            items = services.plans(kind, provider)
+        except (VTUUnknown, VTUFailed):
             return Response({"detail": "Plans are temporarily unavailable."},
                             status=status.HTTP_503_SERVICE_UNAVAILABLE)
-        return Response([i for i in items
-                         if str(i.get("availability", "Available")).lower() == "available"])
+        return Response(items)
 
 
 class VerifyCustomerView(APIView):
@@ -78,11 +83,7 @@ class VerifyCustomerView(APIView):
         info = services.verify_customer(service=d["service"], provider=d["provider"],
                                         customer_id=d["customer_id"],
                                         meter_type=d.get("meter_type"))
-        keep = ("customer_name", "customer_address", "customer_arrears", "outstanding",
-                "min_purchase_amount", "max_purchase_amount", "status", "due_date",
-                "current_bouquet", "renewal_amount", "service_name", "customer_account_type",
-                "customer_username", "minimum_amount", "maximum_amount")
-        return Response({k: info.get(k) for k in keep if k in info})
+        return Response({k: v for k, v in info.items() if v not in (None, "")})
 
 
 class BillOrderViewSet(mixins.CreateModelMixin, viewsets.ReadOnlyModelViewSet):
@@ -117,6 +118,23 @@ class BillOrderViewSet(mixins.CreateModelMixin, viewsets.ReadOnlyModelViewSet):
         order.refresh_from_db()
         return Response(BillOrderSerializer(order).data)
 
+    @action(detail=True, methods=["get"], url_path=r"epin/(?P<index>\d+)")
+    def epin(self, request, pk=None, index=None):
+        """One delivered ePIN pack as an image. Only the buyer (or staff) can open it."""
+        from apps.common.storage import private_storage
+
+        order = self.get_object()
+        packs = [p for p in (order.epins or []) if isinstance(p, dict) and p.get("file")]
+        i = int(index)
+        if i >= len(packs):
+            raise Http404
+        name = packs[i]["file"]
+        resp = FileResponse(private_storage().open(name, "rb"),
+                            content_type=mimetypes.guess_type(name)[0] or "image/webp")
+        resp["Content-Disposition"] = f'inline; filename="jobcatch-pins-{order.receipt_number}-{i + 1}.webp"'
+        resp["Cache-Control"] = "private, no-store"
+        return resp
+
 
 class WalletView(APIView):
     permission_classes = [IsAuthenticated]
@@ -143,40 +161,46 @@ class WalletFundView(APIView):
                         status=status.HTTP_201_CREATED)
 
 
-def _vtu_signature_ok(raw, signature):
-    pin = settings.VTU_USER_PIN
-    if not (pin and signature):
-        return False
-    candidates = [raw]
-    try:
-        # VTU.ng's sample signs json.dumps(payload, separators=(",", ":")) —
-        # accept that serialisation as well as the raw body.
-        candidates.append(json.dumps(json.loads(raw), separators=(",", ":")).encode())
-    except ValueError:
-        pass
-    for body in candidates:
-        computed = hmac.new(pin.encode(), body, hashlib.sha256).hexdigest()
-        if hmac.compare_digest(computed, signature):
-            return True
-    return False
-
-
 class VTUWebhookView(APIView):
+    """
+    VTU.ng's Partner API doesn't sign webhooks, so a webhook is only a trigger:
+    the URL carries a secret token, and the order is moved only by what
+    GET /transactions/{reference} (authenticated with our API key) says.
+    The sandbox doesn't store transactions, so there the event itself is used.
+    """
+
     permission_classes = [AllowAny]
     authentication_classes = []
     throttle_classes = []
 
-    def post(self, request):
-        raw = request.body or b"{}"
-        if not _vtu_signature_ok(raw, request.META.get("HTTP_X_SIGNATURE", "")):
-            return Response({"detail": "Invalid signature."}, status=status.HTTP_403_FORBIDDEN)
+    def post(self, request, token=""):
+        expected = settings.VTU_WEBHOOK_TOKEN
+        if not expected or not hmac.compare_digest(str(token), expected):
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
         try:
-            payload = json.loads(raw)
+            payload = json.loads(request.body or b"{}")
         except ValueError:
             return Response({"detail": "Bad payload."}, status=status.HTTP_400_BAD_REQUEST)
-        order = BillOrder.objects.filter(request_id=payload.get("request_id")).first()
-        if order:
-            services.apply_biller_status(order, payload, source="webhook")
+        data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+        if bool(payload.get("livemode")) == is_sandbox():
+            logger.warning("VTU webhook %s ignored: livemode does not match this environment",
+                           payload.get("id"))
+            return Response({"status": "ignored"})
+        reference = data.get("reference") or data.get("transaction_reference")
+        order = BillOrder.objects.filter(provider_order_id=reference).first() if reference else None
+        if not order:
+            logger.warning("VTU webhook %s for unknown reference %s", payload.get("event"), reference)
+            return Response({"status": "ignored"})
+        if is_sandbox():
+            status_value = data.get("transaction_status") or data.get("status") or ""
+            services.apply_biller_status(order, {**data, "reference": reference,
+                                                 "status": status_value}, source="webhook")
         else:
-            logger.warning("VTU webhook for unknown request_id %s", payload.get("request_id"))
+            try:
+                result = VTUClient().get_transaction(reference=reference)
+            except (VTUFailed, VTUUnknown) as exc:
+                logger.warning("VTU webhook %s: lookup failed (%s); requery will retry",
+                               reference, exc)
+                return Response({"status": "retry"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+            services.apply_biller_status(order, result.transaction, source="webhook")
         return Response({"status": "success"})

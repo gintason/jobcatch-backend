@@ -115,11 +115,11 @@ services:
         sync: false
       - key: WHATSAPP_PHONE_NUMBER_ID
         sync: false
-      - key: VTU_USERNAME
+      - key: VTU_BASE_URL
+        value: https://api.vtu.ng/v1
+      - key: VTU_API_KEY
         sync: false
-      - key: VTU_PASSWORD
-        sync: false
-      - key: VTU_USER_PIN
+      - key: VTU_WEBHOOK_TOKEN
         sync: false
       - key: LLM_PROVIDER
         sync: false
@@ -159,9 +159,9 @@ services:
         sync: false
       - key: BILLING_GATEWAY
         value: flutterwave
-      - key: VTU_USERNAME
-        sync: false
-      - key: VTU_PASSWORD
+      - key: VTU_BASE_URL
+        value: https://api.vtu.ng/v1
+      - key: VTU_API_KEY
         sync: false
       - key: EMAIL_HOST
         sync: false

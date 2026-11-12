@@ -12,7 +12,7 @@ import urllib.request
 
 from django.conf import settings
 
-from .phone import to_international
+from .phone import mask, to_international
 
 logger = logging.getLogger(__name__)
 
@@ -61,3 +61,8 @@ def _send_termii(phone, message):
         raise SMSError(f"Could not send SMS: {exc}") from exc
     if body.get("code") not in (None, "ok"):
         raise SMSError(f"SMS provider error: {body.get('message', body)}")
+    # Accepted by Termii. The message_id is what to look up in Termii's delivery
+    # report (or quote to their support) if the SMS never reaches the phone.
+    logger.info("Termii accepted SMS to %s: message_id=%s balance=%s sender=%r channel=%r",
+                mask(phone), body.get("message_id"), body.get("balance"),
+                settings.TERMII_SENDER_ID, settings.TERMII_CHANNEL)

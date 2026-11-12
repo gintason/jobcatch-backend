@@ -12,6 +12,6 @@ urlpatterns = [
     path("billing/verify-customer/", views.VerifyCustomerView.as_view(), name="billing-verify"),
     path("billing/wallet/", views.WalletView.as_view(), name="billing-wallet"),
     path("billing/wallet/fund/", views.WalletFundView.as_view(), name="billing-wallet-fund"),
-    path("billing/webhook/vtu/", views.VTUWebhookView.as_view(), name="billing-vtu-webhook"),
+    path("billing/webhook/vtu/<str:token>/", views.VTUWebhookView.as_view(), name="billing-vtu-webhook"),
     *router.urls,
 ]

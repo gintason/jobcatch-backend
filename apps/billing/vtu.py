@@ -1,19 +1,23 @@
 """
-VTU.ng API v2 client (https://vtu.ng/wp-json).
+VTU.ng Partner API v1 client (https://api.vtu.ng/v1, sandbox https://sandbox.vtu.ng/v1).
 
-Auth: POST /jwt-auth/v1/token with the reseller account's username/password
-returns a JWT valid for 7 days; generating a new one invalidates the old one.
-We cache it for 6 days and transparently re-login once on a jwt/forbidden
-error. Variation lists are public and cached for 10 minutes.
+Auth: `Authorization: Bearer vtu_sk_live_...` (sandbox keys start vtu_sk_test_ and
+only work against the sandbox host). Plans/packages are cached for 10 minutes.
+
+Purchases are asynchronous: a 201 returns the transaction in `processing`, and
+the final state arrives by webhook or `GET /transactions/{reference}`. Every
+purchase carries our order's request_id as the `Idempotency-Key`, so re-sending
+the same order can never buy twice: VTU.ng replays the original response.
 
 Money safety: a purchase call has three possible outcomes and the caller must
 treat them differently —
-  VTUResult(ok=True, body)   the API answered with an order (any status)
-  VTUFailed                  the API definitively refused (4xx with a known
-                             code): nothing was charged -> safe to refund
-  VTUUnknown                 timeout / 5xx / garbled reply: the order MAY
-                             exist -> do NOT refund; requery by request_id
+  VTUResult(transaction)     VTU.ng accepted the order (any status)
+  VTUFailed                  a definite refusal (validation, insufficient
+                             balance, auth): nothing was created -> safe to refund
+  VTUUnknown                 timeout / 5xx / 409 in-progress / rate limit: the
+                             order MAY exist -> do NOT refund; look it up later
 """
+import base64
 import json
 import logging
 import urllib.error
@@ -26,19 +30,20 @@ from django.core.cache import cache
 
 logger = logging.getLogger(__name__)
 
-TOKEN_CACHE_KEY = "vtu:jwt"
-TOKEN_TTL = 6 * 24 * 3600
-VARIATION_TTL = 600
+CATALOG_TTL = 600
 
-# Error codes after which we know no order was created.
-DEFINITE_FAILURE_CODES = {
-    "missing_fields", "invalid_field", "invalid_service", "invalid_service_id",
-    "invalid_variation_id", "invalid_request_id", "below_minimum_amount",
-    "above_maximum_amount", "below_customer_arrears", "invalid_product",
-    "product_unavailable", "order_failed", "insufficient_funds", "duplicate_order",
-    "rate_limit_exceeded", "wallet_busy", "failure", "invalid_value",
-    "below_minimum_quantity", "above_maximum_quantity",
+# Purchase endpoints by our BillService value.
+PURCHASE_PATHS = {
+    "airtime": "/bills/airtime",
+    "data": "/bills/data",
+    "electricity": "/bills/electricity",
+    "tv": "/bills/cable-tv",
+    "epins": "/bills/epin",
+    "betting": "/bills/bet-funding",
 }
+
+# HTTP statuses after which we know no transaction was created.
+DEFINITE_FAILURE_STATUSES = {400, 401, 402, 403, 404, 422}
 
 
 class VTUError(Exception):
@@ -50,11 +55,11 @@ class VTUError(Exception):
 
 
 class VTUFailed(VTUError):
-    """Definitive refusal — no order was placed."""
+    """Definitive refusal — no transaction was created."""
 
 
 class VTUUnknown(VTUError):
-    """Outcome unknown — requery before deciding anything."""
+    """Outcome unknown — look the transaction up before deciding anything."""
 
 
 class VTUNotConfigured(VTUFailed):
@@ -63,11 +68,30 @@ class VTUNotConfigured(VTUFailed):
 
 @dataclass
 class VTUResult:
-    body: dict
+    transaction: dict
 
     @property
-    def data(self):
-        return self.body.get("data") or {}
+    def status(self):
+        return transaction_status(self.transaction)
+
+
+def transaction_status(tx):
+    """`status` is {"value": ..., "is_final": ...} on API resources, a plain string in webhooks."""
+    status = (tx or {}).get("status")
+    if isinstance(status, dict):
+        status = status.get("value")
+    return str(status or "")
+
+
+def is_sandbox():
+    return "sandbox." in settings.VTU_BASE_URL
+
+
+def _error(body):
+    err = (body or {}).get("error") if isinstance(body, dict) else None
+    if isinstance(err, dict):
+        return err.get("code", ""), err.get("message", "")
+    return "", ""
 
 
 class VTUClient:
@@ -75,15 +99,21 @@ class VTUClient:
         self.base = settings.VTU_BASE_URL.rstrip("/")
 
     # ------------------------------------------------------------ transport
-    def _raw(self, method, path, payload=None, token=None, timeout=45):
+    def _raw(self, method, path, payload=None, params=None, idempotency_key=None, timeout=45):
+        """Returns (http_status, parsed_json_body). Raises VTUUnknown on network errors."""
+        if not settings.VTU_API_KEY:
+            raise VTUNotConfigured("Bill payments are not configured yet.", code="not_configured")
         url = f"{self.base}{path}"
-        headers = {"Accept": "application/json", "User-Agent": "JobCatch/1.0"}
+        if params:
+            url += f"?{urllib.parse.urlencode(params)}"
+        headers = {"Accept": "application/json", "User-Agent": "JobCatch/1.0",
+                   "Authorization": f"Bearer {settings.VTU_API_KEY}"}
         data = None
         if payload is not None:
             headers["Content-Type"] = "application/json"
             data = json.dumps(payload).encode()
-        if token:
-            headers["Authorization"] = f"Bearer {token}"
+        if idempotency_key:
+            headers["Idempotency-Key"] = idempotency_key
         req = urllib.request.Request(url, data=data, method=method, headers=headers)
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -97,119 +127,113 @@ class VTUClient:
         except (urllib.error.URLError, TimeoutError, ValueError) as exc:
             raise VTUUnknown(f"Could not reach the biller: {exc}") from exc
 
-    def _login(self):
-        if not (settings.VTU_USERNAME and settings.VTU_PASSWORD):
-            raise VTUNotConfigured("Bill payments are not configured yet.", code="not_configured")
-        status, body = self._raw("POST", "/jwt-auth/v1/token",
-                                 {"username": settings.VTU_USERNAME,
-                                  "password": settings.VTU_PASSWORD})
-        token = body.get("token")
-        if status != 200 or not token:
-            logger.error("VTU login failed: %s %s", status, body.get("code"))
-            raise VTUFailed("Biller authentication failed.", code=body.get("code", "auth"),
+    def _get(self, path, params=None):
+        status, body = self._raw("GET", path, params=params)
+        if status == 200:
+            return body
+        code, message = _error(body)
+        if status in (401, 403):
+            logger.error("VTU.ng refused %s: %s %s", path, status, code)
+        raise VTUUnknown(message or f"Biller error ({status}).", code=code,
+                         http_status=status, body=body)
+
+    def _verify(self, path, payload):
+        status, body = self._raw("POST", path, payload)
+        if status == 200:
+            return body
+        code, message = _error(body)
+        if 400 <= status < 500 and status not in (408, 409, 429):
+            raise VTUFailed(message or "We couldn't verify that number.", code=code,
                             http_status=status, body=body)
-        cache.set(TOKEN_CACHE_KEY, token, TOKEN_TTL)
-        return token
+        raise VTUUnknown(message or "Verification is temporarily unavailable.", code=code,
+                         http_status=status, body=body)
 
-    def _token(self):
-        return cache.get(TOKEN_CACHE_KEY) or self._login()
-
-    def _call(self, method, path, payload=None, auth=True):
-        token = self._token() if auth else None
-        status, body = self._raw(method, path, payload, token)
-        if auth and status == 403 and str(body.get("code", "")).startswith(("jwt", "rest_forbidden")):
-            cache.delete(TOKEN_CACHE_KEY)           # stale/replaced token: log in again once
-            status, body = self._raw(method, path, payload, self._login())
-        return status, body
-
-    def _order_call(self, path, payload):
-        """POST a purchase and classify the outcome (see module docstring)."""
-        status, body = self._call("POST", path, payload)
-        code = str(body.get("code", ""))
-        if status == 200 and code == "success" and body.get("data"):
-            return VTUResult(body)
-        if code == "duplicate_request_id":
-            # We already sent this request_id: the order exists, go requery it.
-            raise VTUUnknown("Duplicate request id", code=code, http_status=status, body=body)
-        if 400 <= status < 500 and code in DEFINITE_FAILURE_CODES:
-            raise VTUFailed(body.get("message") or "The biller declined this purchase.",
-                            code=code, http_status=status, body=body)
-        raise VTUUnknown(body.get("message") or f"Unexpected biller response ({status}).",
-                         code=code, http_status=status, body=body)
-
-    # ------------------------------------------------------------ public data
-    def variations(self, kind, service_id=None):
-        """kind = "data" | "tv". Cached; returns the list under "data"."""
-        key = f"vtu:variations:{kind}:{service_id or 'all'}"
+    # ------------------------------------------------------------ catalog
+    def _cached_list(self, key, path, params):
         cached = cache.get(key)
         if cached is not None:
             return cached
-        qs = f"?{urllib.parse.urlencode({'service_id': service_id})}" if service_id else ""
-        status, body = self._raw("GET", f"/api/v2/variations/{kind}{qs}")
-        if status != 200 or body.get("code") != "success":
-            raise VTUUnknown(body.get("message") or "Could not load plans.", code=body.get("code", ""))
-        items = body.get("data") or []
-        cache.set(key, items, VARIATION_TTL)
+        items = self._get(path, params).get("data") or []
+        cache.set(key, items, CATALOG_TTL)
         return items
 
-    # ------------------------------------------------------------ authenticated
-    def balance(self):
-        status, body = self._call("GET", "/api/v2/balance")
-        if status != 200:
-            raise VTUUnknown(body.get("message") or "Balance unavailable", code=body.get("code", ""))
-        return body.get("data", {})
+    def data_plans(self, network):
+        """[{variation_code, name, amount, fixed_price}]"""
+        return self._cached_list(f"vtu1:data-plans:{network}", "/bills/data-plans",
+                                 {"network": network})
 
-    def verify_customer(self, *, customer_id, service_id, variation_id=None):
-        payload = {"customer_id": customer_id, "service_id": service_id}
-        if variation_id:
-            payload["variation_id"] = variation_id
-        status, body = self._call("POST", "/api/v2/verify-customer", payload)
-        if status == 200 and body.get("code") == "success":
-            return body.get("data") or {}
-        raise VTUFailed(body.get("message") or "We couldn't verify that number.",
-                        code=body.get("code", ""), http_status=status, body=body)
+    def cable_packages(self, provider):
+        """[{variation_code, name, amount, fixed_price}]"""
+        return self._cached_list(f"vtu1:cable:{provider}", "/bills/cable-packages",
+                                 {"provider": provider})
 
-    def buy_airtime(self, *, request_id, phone, service_id, amount):
-        return self._order_call("/api/v2/airtime", {
-            "request_id": request_id, "phone": phone, "service_id": service_id,
-            "amount": int(amount)})
+    def wallet(self):
+        return self._get("/wallet").get("data") or []
 
-    def buy_data(self, *, request_id, phone, service_id, variation_id):
-        return self._order_call("/api/v2/data", {
-            "request_id": request_id, "phone": phone, "service_id": service_id,
-            "variation_id": str(variation_id)})
+    # ------------------------------------------------------------ verification
+    def verify_meter(self, *, disco, meter_number, meter_type):
+        body = self._verify("/bills/electricity/verify-meter", {
+            "disco_slug": disco, "meter_number": meter_number, "meter_type": meter_type})
+        return body.get("verification") or {}
 
-    def buy_electricity(self, *, request_id, customer_id, service_id, variation_id, amount):
-        return self._order_call("/api/v2/electricity", {
-            "request_id": request_id, "customer_id": customer_id, "service_id": service_id,
-            "variation_id": variation_id, "amount": int(amount)})
+    def verify_smartcard(self, *, provider, smartcard_number):
+        body = self._verify("/bills/cable-tv/verify-smartcard", {
+            "provider": provider, "smartcard_number": smartcard_number})
+        return body.get("verification") or {}
 
-    def buy_tv(self, *, request_id, customer_id, service_id, variation_id,
-               subscription_type="change", amount=None):
-        payload = {"request_id": request_id, "customer_id": customer_id,
-                   "service_id": service_id, "variation_id": str(variation_id)}
-        if service_id in ("dstv", "gotv"):
-            payload["subscription_type"] = subscription_type or "change"
-        if amount is not None:
-            payload["amount"] = int(amount)
-        return self._order_call("/api/v2/tv", payload)
+    def verify_bet_account(self, *, provider, account_id):
+        body = self._verify("/bills/bet-funding/verify-account", {
+            "provider": provider, "account_id": account_id})
+        return body.get("validation") or {}
 
-    def buy_epins(self, *, request_id, service_id, value, quantity):
-        return self._order_call("/api/v2/epins", {
-            "request_id": request_id, "service_id": service_id,
-            "value": int(value), "quantity": int(quantity)})
-
-    def buy_betting(self, *, request_id, customer_id, service_id, amount):
-        return self._order_call("/api/v2/betting", {
-            "request_id": request_id, "customer_id": customer_id, "service_id": service_id,
-            "amount": int(amount)})
-
-    def requery(self, request_id):
-        status, body = self._call("POST", "/api/v2/requery", {"request_id": request_id})
-        if status == 200 and body.get("code") == "success":
-            return VTUResult(body)
-        if body.get("code") == "order_not_found":
-            raise VTUFailed("Order not found at biller.", code="order_not_found",
+    # ------------------------------------------------------------ purchases
+    def purchase(self, service, payload, *, idempotency_key):
+        """POST a purchase and classify the outcome (see module docstring)."""
+        status, body = self._raw("POST", PURCHASE_PATHS[service], payload,
+                                 idempotency_key=idempotency_key)
+        tx = body.get("transaction") if isinstance(body, dict) else None
+        if status in (200, 201) and isinstance(tx, dict):
+            return VTUResult(tx)
+        code, message = _error(body)
+        if status in DEFINITE_FAILURE_STATUSES:
+            raise VTUFailed(message or "The biller declined this purchase.", code=code,
                             http_status=status, body=body)
-        raise VTUUnknown(body.get("message") or "Requery failed.", code=body.get("code", ""),
+        raise VTUUnknown(message or f"Unexpected biller response ({status}).", code=code,
                          http_status=status, body=body)
+
+    def get_transaction(self, *, reference=None, idempotency_key=None):
+        """
+        Look a purchase up by VTU.ng's reference, or by our Idempotency-Key when we
+        never got the reference back. VTUFailed(code="not_found") if it doesn't exist.
+        """
+        params = None
+        if not reference:
+            reference, params = idempotency_key, {"type": "bill_payment"}
+        status, body = self._raw("GET", f"/transactions/{urllib.parse.quote(reference)}",
+                                 params=params)
+        if status == 200:
+            data = body.get("data", body) if isinstance(body, dict) else {}
+            tx = data.get("transaction", data) if isinstance(data, dict) else {}
+            return VTUResult(tx)
+        code, message = _error(body)
+        if status == 404:
+            raise VTUFailed(message or "Transaction not found.", code="not_found",
+                            http_status=status, body=body)
+        raise VTUUnknown(message or f"Lookup failed ({status}).", code=code,
+                         http_status=status, body=body)
+
+    def epin_image(self, card):
+        """WebP bytes for one delivered ePIN pack (inline data URI, else download_url)."""
+        image_url = str(card.get("image_url") or "")
+        if image_url.startswith("data:") and "," in image_url:
+            return base64.b64decode(image_url.split(",", 1)[1])
+        download = str(card.get("download_url") or "")
+        if not download.startswith(self.base + "/"):
+            raise VTUUnknown("No voucher image in the biller's response.")
+        req = urllib.request.Request(download, headers={
+            "Authorization": f"Bearer {settings.VTU_API_KEY}", "User-Agent": "JobCatch/1.0"})
+        try:
+            with urllib.request.urlopen(req, timeout=45) as resp:
+                return resp.read()
+        except (urllib.error.URLError, TimeoutError) as exc:
+            raise VTUUnknown(f"Could not download the voucher image: {exc}") from exc

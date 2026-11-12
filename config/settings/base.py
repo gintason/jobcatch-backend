@@ -216,6 +216,10 @@ SUBSCRIPTION_PRICES = {                       # Naira
     "pro": Decimal("2500.00"),
 }
 CV_SERVICE_PRICE = 5000  # Naira, one-off concierge CV service
+# Paying for an artisan booking through JobCatch means holding the artisan's money
+# until it is paid out, which the payment providers' terms don't cover. Off by default:
+# customers pay artisans directly.
+BOOKING_PAYMENTS_ENABLED = env.bool("BOOKING_PAYMENTS_ENABLED", default=False)
 
 PAYMENT_CALLBACK_URL = env(
     "PAYMENT_CALLBACK_URL", default="https://jobcatchonline.com/payments/callback"
@@ -278,12 +282,13 @@ WHATSAPP_PHONE_NUMBER_ID = env("WHATSAPP_PHONE_NUMBER_ID", default="")
 WHATSAPP_JOB_ALERT_TEMPLATE = env("WHATSAPP_JOB_ALERT_TEMPLATE", default="job_alert")
 WHATSAPP_TEMPLATE_LANG = env("WHATSAPP_TEMPLATE_LANG", default="en")
 
-# --- Bill payments (VTU.ng v2) ---
-VTU_BASE_URL = env("VTU_BASE_URL", default="https://vtu.ng/wp-json")
-VTU_USERNAME = env("VTU_USERNAME", default="")
-VTU_PASSWORD = env("VTU_PASSWORD", default="")
-VTU_USER_PIN = env("VTU_USER_PIN", default="")      # signs VTU.ng webhooks
-# Flat convenience fee (Naira) added per bill type; 0 = charge face value only.
+# --- Bill payments (VTU.ng Partner API v1) ---
+# Live https://api.vtu.ng/v1 with a vtu_sk_live_ key; sandbox https://sandbox.vtu.ng/v1
+# with a vtu_sk_test_ key. Keys are environment-locked.
+VTU_BASE_URL = env("VTU_BASE_URL", default="https://api.vtu.ng/v1")
+VTU_API_KEY = env("VTU_API_KEY", default="")
+# Secret path segment of the webhook URL: /api/v1/billing/webhook/vtu/<token>/
+VTU_WEBHOOK_TOKEN = env("VTU_WEBHOOK_TOKEN", default="")
 BILL_SERVICE_FEES = {
     "airtime": Decimal(env("BILL_FEE_AIRTIME", default="0")),
     "data": Decimal(env("BILL_FEE_DATA", default="0")),

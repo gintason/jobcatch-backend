@@ -67,8 +67,9 @@ All are optional with safe defaults. See `.env.example` for the full list.
 | `WHATSAPP_BACKEND` | `console` | `cloud_api` to send real WhatsApp alerts |
 | `WHATSAPP_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID` | — | Meta WhatsApp Cloud API |
 | `WHATSAPP_JOB_ALERT_TEMPLATE` | `job_alert` | Approved template with 3 body variables: title, company, link |
-| `VTU_USERNAME`, `VTU_PASSWORD` | — | VTU.ng **reseller** account login |
-| `VTU_USER_PIN` | — | Used to verify VTU.ng webhook signatures |
+| `VTU_BASE_URL` | `https://api.vtu.ng/v1` | VTU.ng Partner API. Use `https://sandbox.vtu.ng/v1` with a sandbox key to test |
+| `VTU_API_KEY` | — | **Secret** key from app.vtu.ng → Profile → Developer (`vtu_sk_live_…`, or `vtu_sk_test_…` for sandbox). Keys only work against their own environment |
+| `VTU_WEBHOOK_TOKEN` | — | Long random string; it's the last part of the webhook URL |
 | `BILL_FEE_AIRTIME` … `BILL_FEE_TV`, `BILL_FEE_EPINS`, `BILL_FEE_BETTING` | `0` | Optional flat convenience fee per purchase |
 | `BILL_BETTING_ENABLED` | `True` | `False` hides betting-wallet funding (tab, catalogue and API) without a deploy |
 | `COMPLAINTS_NOTIFY_EMAIL` | `info@jobcatchonline.com` | Support inbox copied on every new complaint |
@@ -80,7 +81,7 @@ All are optional with safe defaults. See `.env.example` for the full list.
 |---|---|
 | Paystack → Settings → API Keys & Webhooks | `https://<api-domain>/api/v1/payments/webhook/paystack/` |
 | Flutterwave → Settings → Webhooks | `https://<api-domain>/api/v1/payments/webhook/flutterwave/` and set the **Secret hash** = `FLUTTERWAVE_WEBHOOK_HASH` |
-| VTU.ng → Account → Developer | Webhook `https://<api-domain>/api/v1/billing/webhook/vtu/`; enable API access; optionally whitelist Render's outbound IPs; set a low-balance alert |
+| app.vtu.ng → Profile → Developer → Webhooks | `https://<api-domain>/api/v1/billing/webhook/vtu/<VTU_WEBHOOK_TOKEN>/`. Live keys need KYC Tier 2 + an Agent Tier; sandbox keys need KYC Tier 2. Webhooks are only a trigger: every event is re-checked with VTU.ng's API before an order moves |
 | Paystack/Flutterwave redirect | `PAYMENT_CALLBACK_URL` (unchanged): `https://jobcatchonline.com/payments/callback` |
 
 **Fund your VTU.ng wallet.** Bill purchases are paid from your VTU.ng reseller

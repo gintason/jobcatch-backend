@@ -46,6 +46,9 @@ class PaymentInitializeSerializer(serializers.Serializer):
     def validate(self, data):
         request = self.context["request"]
         if data["purpose"] == PaymentPurpose.BOOKING:
+            if not settings.BOOKING_PAYMENTS_ENABLED:
+                raise serializers.ValidationError(
+                    "Bookings are paid directly to the artisan, not through JobCatch.")
             booking = data.get("booking")
             if not booking:
                 raise serializers.ValidationError("A booking id is required.")
