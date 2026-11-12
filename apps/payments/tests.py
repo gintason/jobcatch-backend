@@ -158,3 +158,20 @@ def test_booking_payments_are_off_by_default(client):
     res = client.post("/api/v1/payments/initialize/",
                       {"purpose": "booking", "booking": str(booking.id)}, format="json")
     assert res.status_code == 400 and "directly to the artisan" in str(res.data)
+
+
+@override_settings(PAYSTACK_SECRET_KEY="rk_live_restricted", PAYSTACK_WEBHOOK_SECRET="whsec_test")
+def test_webhook_signed_with_signing_secret_is_accepted(client):
+    payment = Payment.objects.create(
+        payer=_user("a6@x.com", "artisan"), purpose=PaymentPurpose.SUBSCRIPTION,
+        gateway="paystack", reference="JC-WHSEC", amount=2500, status=PaymentStatus.INITIATED,
+    )
+    Subscription.objects.create(user=payment.payer, plan="pro", is_active=False,
+                                started_at=timezone.now(), payment=payment)
+    body = json.dumps({"event": "charge.success", "data": {"reference": "JC-WHSEC"}})
+    sig = hmac.new(b"whsec_test", body.encode(), hashlib.sha512).hexdigest()
+    resp = client.post("/api/v1/payments/webhook/paystack/", data=body,
+                       content_type="application/json", HTTP_X_PAYSTACK_SIGNATURE=sig)
+    assert resp.status_code == 200
+    payment.refresh_from_db()
+    assert payment.status == PaymentStatus.SUCCESS

@@ -208,6 +208,9 @@ ALLOWED_UPLOAD_EXTENSIONS = ["jpg", "jpeg", "png", "pdf", "mp4"]
 
 # --- Payments & subscriptions ---
 PAYSTACK_SECRET_KEY = env("PAYSTACK_SECRET_KEY", default="")
+# Dashboard → Developers → API configuration → "Webhook signing secret" (needed with
+# restricted API keys; without it webhooks are checked with PAYSTACK_SECRET_KEY).
+PAYSTACK_WEBHOOK_SECRET = env("PAYSTACK_WEBHOOK_SECRET", default="")
 FLUTTERWAVE_SECRET_KEY = env("FLUTTERWAVE_SECRET_KEY", default="")
 COMMISSION_RATE = Decimal("0.10")           # 10% platform fee on booking payments
 SUBSCRIPTION_PERIOD_DAYS = 30

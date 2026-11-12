@@ -115,10 +115,14 @@ class PaystackGateway(PaymentGateway):
                 "currency": data.get("currency", "NGN"), "raw": resp}
 
     def verify_signature(self, raw_body: bytes, signature: str) -> bool:
-        computed = hmac.new(
-            settings.PAYSTACK_SECRET_KEY.encode(), raw_body, hashlib.sha512
-        ).hexdigest()
-        return hmac.compare_digest(computed, signature or "")
+        # Webhooks are signed with the dashboard's "Webhook signing secret" when the
+        # integration uses a restricted API key, otherwise with the secret key itself.
+        for secret in (settings.PAYSTACK_WEBHOOK_SECRET, settings.PAYSTACK_SECRET_KEY):
+            if secret and hmac.compare_digest(
+                    hmac.new(secret.encode(), raw_body, hashlib.sha512).hexdigest(),
+                    signature or ""):
+                return True
+        return False
 
     def verify_webhook(self, request):
         return self.verify_signature(
