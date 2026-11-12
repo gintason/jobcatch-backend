@@ -164,6 +164,42 @@ class LoginView(APIView):
         return _auth_response(user, request)
 
 
+class GoogleSignInView(APIView):
+    """
+    POST {credential: <Google ID token>, role?} -> same response as login.
+    Signs in the account with that (Google-verified) email, or creates one.
+    """
+
+    permission_classes = [permissions.AllowAny]
+    throttle_classes = [LoginThrottle]
+
+    def post(self, request):
+        from .google import GoogleTokenError, verify_id_token
+
+        try:
+            info = verify_id_token(str(request.data.get("credential") or ""))
+        except GoogleTokenError as exc:
+            return Response({"detail": str(exc), "code": "google_failed"},
+                            status=status.HTTP_400_BAD_REQUEST)
+        user = User.objects.filter(email__iexact=info["email"]).first()
+        created = False
+        if user is None:
+            role = request.data.get("role")
+            user = User(email=info["email"], full_name=(info["name"] or info["email"].split("@")[0])[:150],
+                        role=role if role in SwitchRoleView.SWITCHABLE else UserRole.CUSTOMER,
+                        is_email_verified=True)
+            user.set_unusable_password()       # they can add one later via "forgot password"
+            user.save()                         # post_save creates the role profiles
+            created = True
+        elif not user.is_active:
+            return Response({"detail": "Account is disabled."}, status=status.HTTP_403_FORBIDDEN)
+        # Google has proved they own this email address.
+        user.is_email_verified = True
+        user.last_login = timezone.now()
+        user.save(update_fields=["is_email_verified", "last_login"])
+        return _auth_response(user, request, created=created)
+
+
 class CookieTokenRefreshView(APIView):
     """Reads refresh from the cookie (web) or the request body (mobile)."""
 

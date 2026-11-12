@@ -156,6 +156,11 @@ SPECTACULAR_SETTINGS = {
 }
 
 # ------------------------------------------------------------------ JWT
+# "Sign in with Google": OAuth client IDs whose ID tokens we accept (web now;
+# add the Android / iOS client IDs here for the mobile app). Not secret.
+GOOGLE_CLIENT_IDS = env.list("GOOGLE_CLIENT_IDS", default=[
+    "306763553702-jalc00es33k28etpj8shsufela5486t1.apps.googleusercontent.com"])
+
 SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(minutes=env("ACCESS_TOKEN_LIFETIME_MIN")),
     "REFRESH_TOKEN_LIFETIME": timedelta(days=env("REFRESH_TOKEN_LIFETIME_DAYS")),
