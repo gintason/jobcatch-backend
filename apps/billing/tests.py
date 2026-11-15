@@ -657,3 +657,42 @@ def test_giftcard_sale_declined(client, user):
     trade = GiftCardTrade.objects.get()
     assert trade.status == "cancelled" and trade.rejection_reason == "Code already redeemed"
     assert not WalletTransaction.objects.filter(source="giftcard_sale").exists()
+
+
+# ---------------------------------------------------------------- ePIN stock
+def _buy_pins(client, user, value="500", quantity=2):
+    client.force_authenticate(user)
+    return client.post("/api/v1/billing/orders/", {
+        "service": "epins", "provider": "glo", "variation_id": value, "quantity": quantity,
+        "payment_method": "wallet"}, format="json")
+
+
+def test_out_of_stock_pins_are_refused_before_charging(client, user):
+    _fund(user, 20000)
+    stock = (200, {"stock": {"GLO": {"100": 4, "200": 4, "500": 0, "1000": 1}}, "pack_size": 10})
+    fake = FakeVTU({"GET /bills/epin-stock": stock})
+    with patch.object(VTUClient, "_raw", fake):
+        resp = _buy_pins(client, user)
+    assert resp.status_code == 400 and "out of stock" in str(resp.json()).lower()
+    assert not any(c["method"] == "POST" for c in fake.calls)          # nothing bought
+    assert Wallet.objects.get(user=user).balance == Decimal("20000")   # nothing charged
+
+
+def test_low_pin_stock_asks_for_fewer_packs(client, user):
+    _fund(user, 20000)
+    stock = (200, {"stock": {"GLO": [4, 4, 1, 0]}, "pack_size": 10})   # array form, 100/200/500/1000
+    with patch.object(VTUClient, "_raw", FakeVTU({"GET /bills/epin-stock": stock})):
+        resp = _buy_pins(client, user, quantity=2)
+    assert resp.status_code == 400 and "Only 1 pack" in str(resp.json())
+
+
+def test_stock_outage_never_blocks_pin_sales_and_endpoint_reports_stock(client, user):
+    _fund(user, 20000)
+    fake = FakeVTU({"GET /bills/epin-stock": (500, {}), "POST /bills/epin": _created("processing")})
+    with patch.object(VTUClient, "_raw", fake):
+        assert _buy_pins(client, user).status_code == 201
+    cache.clear()
+    stock = (200, {"stock": {"MTN": {"100": 3, "500": 0}}})
+    with patch.object(VTUClient, "_raw", FakeVTU({"GET /bills/epin-stock": stock})):
+        body = APIClient().get("/api/v1/billing/epin-stock/").json()
+    assert body == {"stock": {"mtn": {"100": 3, "500": 0}}, "known": True}

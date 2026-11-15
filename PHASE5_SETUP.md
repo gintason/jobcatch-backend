@@ -158,3 +158,59 @@ and bill purchases are refunded with "not configured".
   payments / subaccounts**. Tell Paystack about deliveries before launch.
 - For errands, the customer pays the rider for the items directly on delivery; only the delivery
   fee goes through JobCatch.
+- **Rider identity:** riders must give an ID type and number, upload the ID, and take a **selfie**
+  before their application is reviewed. In `/admin/reviews` → **Riders**, compare the selfie with
+  the ID photo, and the ID name with the payout account name, before approving.
+
+
+## 9. Referrals (invite & earn)
+
+- Every user has a code and link (`/referrals` on web, **Account → Invite & earn** in the app).
+- A friend who signs up with it (email or Google), or adds it within `REFERRAL_APPLY_DAYS` days,
+  is linked to the inviter. The inviter gets `REFERRAL_REWARD` in their wallet after the friend's
+  **first purchase**: a successful bill of at least `REFERRAL_MIN_SPEND`, or a completed delivery.
+  Optional `REFERRAL_NEW_USER_BONUS` for the friend. At most `REFERRAL_MONTHLY_CAP` rewards per
+  inviter per month. Admins can mark suspicious referrals "not eligible" in Django admin → Referrals.
+
+| Variable | Default |
+|---|---|
+| `REFERRAL_ENABLED` | `True` |
+| `REFERRAL_REWARD` | `500` |
+| `REFERRAL_NEW_USER_BONUS` | `0` |
+| `REFERRAL_MIN_SPEND` | `1000` |
+| `REFERRAL_MONTHLY_CAP` | `20` |
+| `REFERRAL_APPLY_DAYS` | `7` |
+
+
+## 10. Transfers (wallet → bank, wallet → wallet)
+
+- `/transfers` on web, **Send** on the app's wallet card. Every transfer needs a 4-digit
+  transaction PIN (5 wrong tries lock transfers for 30 minutes; reset with the account password).
+- **Wallet → wallet:** instant and free, by the recipient's email or phone number.
+- **Wallet → bank:** paid out with **Paystack Transfers**. The wallet is debited (amount + fee);
+  a failed or reversed transfer is refunded automatically, once. Outcomes arrive by webhook
+  (`transfer.success / failed / reversed`, on the same Paystack webhook URL) and are re-checked by
+  the scheduler step `requery_bank_transfers`.
+- **Before turning it on in Paystack:**
+  1. Ask Paystack to enable **Transfers** on the live account (they review this separately).
+  2. Dashboard → Settings → Preferences → **disable "Confirm transfers with OTP"**, otherwise
+     every transfer stops for an OTP and is refunded.
+  3. Keep enough money in the Paystack **balance** — payouts are paid from it.
+- Card top-ups are spendable on bills at once but can be transferred out only after
+  `TRANSFER_TOPUP_HOLD_HOURS` (stops stolen-card cash-outs).
+
+| Variable | Default |
+|---|---|
+| `WALLET_TRANSFER_ENABLED` | `True` |
+| `BANK_TRANSFER_ENABLED` | `True` |
+| `BANK_TRANSFER_FEE` | `50` |
+| `TRANSFER_MIN` | `100` |
+| `TRANSFER_MAX_SINGLE` | `500000` |
+| `TRANSFER_DAILY_LIMIT` | `1000000` |
+| `TRANSFER_TOPUP_HOLD_HOURS` | `24` |
+
+
+## 11. API rate limit
+
+`THROTTLE_USER_RATE` (default `120/min`). The old `1000/day` limit locked active users out after a
+few hours because dashboards poll notifications every 30 seconds.

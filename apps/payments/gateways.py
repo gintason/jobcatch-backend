@@ -30,7 +30,15 @@ _BASE_HEADERS = {
 
 
 class GatewayError(Exception):
-    """Raised when the payment provider rejects or fails a request."""
+    """
+    Raised when the payment provider rejects or fails a request. `http_status` is
+    the provider's HTTP status when it answered (a definite rejection), or None
+    when we couldn't reach it (outcome unknown — check again before retrying).
+    """
+
+    def __init__(self, message="", http_status=None):
+        super().__init__(message)
+        self.http_status = http_status
 
 
 def _request_json(url, headers, payload=None, method="GET"):
@@ -43,7 +51,7 @@ def _request_json(url, headers, payload=None, method="GET"):
             return json.loads(resp.read().decode())
     except urllib.error.HTTPError as exc:
         body = exc.read().decode(errors="replace")[:500]
-        raise GatewayError(f"Payment provider returned {exc.code}: {body}") from exc
+        raise GatewayError(f"Payment provider returned {exc.code}: {body}", http_status=exc.code) from exc
     except urllib.error.URLError as exc:
         raise GatewayError(f"Could not reach payment provider: {exc.reason}") from exc
 
@@ -81,6 +89,10 @@ class PaymentGateway:
 class PaystackGateway(PaymentGateway):
     name = "paystack"
     BASE = "https://api.paystack.co"
+
+    def __init__(self):
+        # Overridable only for local end-to-end testing against a stub.
+        self.BASE = getattr(settings, "PAYSTACK_BASE_URL", "") or self.BASE
 
     def is_configured(self):
         return bool(settings.PAYSTACK_SECRET_KEY)
@@ -133,6 +145,32 @@ class PaystackGateway(PaymentGateway):
         if not resp.get("status") or not code:
             raise GatewayError(resp.get("message") or "Could not create the payout account")
         return code
+
+    # ---- transfers (wallet withdrawals to bank) ----
+    def create_transfer_recipient(self, *, name, account_number, bank_code):
+        resp = _post_json(f"{self.BASE}/transferrecipient", {
+            "type": "nuban", "name": name[:100], "account_number": account_number,
+            "bank_code": bank_code, "currency": "NGN"}, self._auth)
+        code = (resp.get("data") or {}).get("recipient_code")
+        if not resp.get("status") or not code:
+            raise GatewayError(resp.get("message") or "Could not add the recipient", http_status=400)
+        return code
+
+    def initiate_transfer(self, *, amount, recipient_code, reference, reason=""):
+        """{status: success|pending|otp|failed|..., transfer_code, raw}."""
+        resp = _post_json(f"{self.BASE}/transfer", {
+            "source": "balance", "amount": int((Decimal(amount) * 100).to_integral_value()),
+            "recipient": recipient_code, "reference": reference, "reason": reason[:100],
+            "currency": "NGN"}, self._auth)
+        data = resp.get("data") or {}
+        return {"status": str(data.get("status") or ""), "transfer_code": str(data.get("transfer_code") or ""),
+                "message": resp.get("message") or "", "raw": resp}
+
+    def verify_transfer(self, reference):
+        resp = _get_json(f"{self.BASE}/transfer/verify/{urllib.parse.quote(reference)}", self._auth)
+        data = resp.get("data") or {}
+        return {"status": str(data.get("status") or ""), "transfer_code": str(data.get("transfer_code") or ""),
+                "reason": str(data.get("reason") or data.get("failures") or ""), "raw": resp}
 
     def verify(self, reference):
         resp = _get_json(

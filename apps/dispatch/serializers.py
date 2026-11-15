@@ -130,6 +130,9 @@ class RiderProfileSerializer(serializers.ModelSerializer):
     status_label = serializers.CharField(source="get_status_display", read_only=True)
     vehicle_label = serializers.CharField(source="get_vehicle_type_display", read_only=True)
     has_id_document = serializers.SerializerMethodField()
+    has_selfie = serializers.SerializerMethodField()
+    id_type_label = serializers.CharField(source="get_id_type_display", read_only=True)
+    missing = serializers.SerializerMethodField()
     account_number_masked = serializers.SerializerMethodField()
     has_payout_account = serializers.SerializerMethodField()
     can_work = serializers.BooleanField(read_only=True)
@@ -139,7 +142,8 @@ class RiderProfileSerializer(serializers.ModelSerializer):
     class Meta:
         model = RiderProfile
         fields = ("phone", "vehicle_type", "vehicle_label", "plate_number", "city", "state",
-                  "status", "status_label", "review_note", "has_id_document", "bank_name",
+                  "status", "status_label", "review_note", "id_type", "id_type_label", "id_number",
+                  "has_id_document", "has_selfie", "missing", "bank_name",
                   "account_name", "account_number_masked", "has_payout_account", "is_online",
                   "can_work", "completed_count", "rating", "share_percent")
         read_only_fields = ("status", "review_note", "bank_name", "account_name", "is_online",
@@ -147,6 +151,21 @@ class RiderProfileSerializer(serializers.ModelSerializer):
 
     def get_has_id_document(self, obj):
         return bool(obj.id_document)
+
+    def get_has_selfie(self, obj):
+        return bool(obj.selfie)
+
+    def get_missing(self, obj):
+        """What the rider still has to provide before their application can be reviewed."""
+        checks = [("phone", obj.phone), ("ID type", obj.id_type), ("ID number", obj.id_number),
+                  ("ID document", obj.id_document), ("selfie", obj.selfie), ("payout account", obj.subaccount_code)]
+        return [label for label, ok in checks if not ok]
+
+    def validate_id_number(self, value):
+        value = (value or "").strip().upper()
+        if value and not (5 <= len(value) <= 30 and value.replace("-", "").replace(" ", "").isalnum()):
+            raise serializers.ValidationError("Enter the number exactly as it appears on your ID.")
+        return value
 
     def get_account_number_masked(self, obj):
         return f"******{obj.account_number[-4:]}" if obj.account_number else ""

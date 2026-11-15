@@ -16,8 +16,11 @@ from .models import (
 class RegisterSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, min_length=8, style={"input_type": "password"})
     # Admins cannot self-register.
+    # Optional: one account works across every role (users switch at the hub);
+    # new accounts start as a customer, like Google sign-ups.
     role = serializers.ChoiceField(
-        choices=[c for c in UserRole.choices if c[0] != UserRole.ADMIN]
+        choices=[c for c in UserRole.choices if c[0] != UserRole.ADMIN],
+        required=False, default=UserRole.CUSTOMER,
     )
     # `phone` is unique but optional: many users register without one. Empty
     # strings would collide on the unique index (only NULLs are exempt), so a
@@ -26,9 +29,12 @@ class RegisterSerializer(serializers.ModelSerializer):
         required=False, allow_blank=True, allow_null=True, max_length=20
     )
 
+    # Optional invite code from a friend (referrals app).
+    referral_code = serializers.CharField(required=False, allow_blank=True, write_only=True, max_length=12)
+
     class Meta:
         model = User
-        fields = ("id", "email", "phone", "full_name", "role", "password")
+        fields = ("id", "email", "phone", "full_name", "role", "password", "referral_code")
         read_only_fields = ("id",)
 
     def validate_password(self, value):
@@ -43,13 +49,24 @@ class RegisterSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("This phone number is already registered.")
         return value
 
+    def validate_referral_code(self, value):
+        from apps.referrals.services import find_referrer
+        value = (value or "").strip().upper()
+        if value and find_referrer(value) is None:
+            raise serializers.ValidationError("That referral code isn't valid.")
+        return value
+
     def create(self, validated_data):
+        referral_code = validated_data.pop("referral_code", "")
         password = validated_data.pop("password")
         validated_data["phone"] = validated_data.get("phone") or None
         user = User(**validated_data)
         user.set_password(password)
         user.is_email_verified = False
         user.save()  # post_save signal creates the role profile
+        if referral_code:
+            from apps.referrals.services import attach
+            attach(user, referral_code)
         return user
 
 

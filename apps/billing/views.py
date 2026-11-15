@@ -78,6 +78,16 @@ class VariationsView(APIView):
         return Response(items)
 
 
+class EpinStockView(APIView):
+    """GET /billing/epin-stock/ — packs in stock per network and value (empty if unknown)."""
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        stock = services.epin_stock()
+        return Response({"stock": {net: {str(k): v for k, v in row.items()} for net, row in stock.items()},
+                         "known": bool(stock)})
+
+
 class VerifyCustomerView(APIView):
     permission_classes = [IsAuthenticated]
     throttle_classes = [OTPThrottle]   # lookups are enumerable data — keep them slow

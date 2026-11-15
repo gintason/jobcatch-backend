@@ -117,7 +117,12 @@ class RiderProfileView(APIView):
                     or doc.size > 5 * 1024 * 1024):
             return Response({"id_document": "Upload a JPEG, PNG or PDF up to 5 MB."},
                             status=status.HTTP_400_BAD_REQUEST)
-        rider = services.update_rider(rider, ser.validated_data, id_document=doc)
+        selfie = request.FILES.get("selfie")
+        if selfie and (selfie.content_type not in ("image/jpeg", "image/png", "image/webp", "image/heic")
+                       or selfie.size > 8 * 1024 * 1024):
+            return Response({"selfie": "Take a clear photo of your face (JPEG or PNG, up to 8 MB)."},
+                            status=status.HTTP_400_BAD_REQUEST)
+        rider = services.update_rider(rider, ser.validated_data, id_document=doc, selfie=selfie)
         return Response(RiderProfileSerializer(rider).data)
 
 
@@ -231,15 +236,22 @@ class AdminRiderViewSet(viewsets.ReadOnlyModelViewSet):
         rider = services.review_rider(self.get_object(), admin=request.user, approve=False, note=note)
         return Response(AdminRiderSerializer(rider).data)
 
-    @action(detail=True, methods=["get"], url_path="id-document",
-            authentication_classes=[VersionedJWTAuthentication, SessionAuthentication])
-    def id_document(self, request, pk=None):
-        rider = self.get_object()
-        if not rider.id_document:
+    @staticmethod
+    def _file(f):
+        if not f:
             raise Http404
-        resp = FileResponse(rider.id_document.open("rb"),
-                            content_type=mimetypes.guess_type(rider.id_document.name)[0]
+        resp = FileResponse(f.open("rb"), content_type=mimetypes.guess_type(f.name)[0]
                             or "application/octet-stream")
         resp["Content-Disposition"] = "inline"
         resp["Cache-Control"] = "private, no-store"
         return resp
+
+    @action(detail=True, methods=["get"], url_path="id-document",
+            authentication_classes=[VersionedJWTAuthentication, SessionAuthentication])
+    def id_document(self, request, pk=None):
+        return self._file(self.get_object().id_document)
+
+    @action(detail=True, methods=["get"], url_path="selfie",
+            authentication_classes=[VersionedJWTAuthentication, SessionAuthentication])
+    def selfie(self, request, pk=None):
+        return self._file(self.get_object().selfie)

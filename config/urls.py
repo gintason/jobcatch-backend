@@ -35,6 +35,8 @@ urlpatterns = [
     path("api/v1/", include("apps.engagement.urls")),     # upgrade prompts, seeker Pro, job alerts
     path("api/v1/", include("apps.complaints.urls")),     # complaint box
     path("api/v1/", include("apps.dispatch.urls")),       # dispatch & delivery
+    path("api/v1/", include("apps.referrals.urls")),      # invite friends
+    path("api/v1/", include("apps.transfers.urls")),      # wallet & bank transfers
 
     # --- OpenAPI schema + docs ---
     path("api/schema/", SpectacularAPIView.as_view(), name="schema"),

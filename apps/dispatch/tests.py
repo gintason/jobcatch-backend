@@ -77,11 +77,14 @@ def _approved_rider(client, paystack, email="musa@x.com", at=LEKKI):
     user = _user(email)
     client.force_authenticate(user)
     doc = SimpleUploadedFile("id.png", b"\x89PNG\r\n\x1a\nid", content_type="image/png")
+    selfie = SimpleUploadedFile("me.jpg", b"\xff\xd8\xffselfie", content_type="image/jpeg")
     r = client.patch("/api/v1/dispatch/rider/", {"phone": "08031112222", "vehicle_type": "bike",
-                                                 "plate_number": "LND-123AB", "id_document": doc},
+                                                 "plate_number": "LND-123AB", "id_type": "nin",
+                                                 "id_number": "12345678901", "id_document": doc, "selfie": selfie},
                      format="multipart")
     assert r.status_code == 200, r.json()
     assert r.json()["status"] == "incomplete"               # no payout account yet
+    assert r.json()["missing"] == ["payout account"] and r.json()["has_selfie"]
     r = client.post("/api/v1/dispatch/rider/payout-account/",
                     {"bank_code": "044", "bank_name": "Access Bank", "account_number": "0123456789"},
                     format="json")
@@ -246,3 +249,26 @@ def test_paystack_split_request_body():
     body = post.call_args[0][1]
     assert body["amount"] == 250000 and body["subaccount"] == "ACCT_x"
     assert body["transaction_charge"] == 50000 and body["bearer"] == "account"
+
+
+
+def test_rider_without_selfie_is_not_sent_for_review(client, paystack):
+    user = _user("noselfie@x.com")
+    client.force_authenticate(user)
+    doc = SimpleUploadedFile("id.png", b"\x89PNG\r\n\x1a\nid", content_type="image/png")
+    client.patch("/api/v1/dispatch/rider/", {"phone": "08031112222", "id_type": "drivers_licence",
+                                             "id_number": "ABC12345678", "id_document": doc}, format="multipart")
+    r = client.post("/api/v1/dispatch/rider/payout-account/",
+                    {"bank_code": "044", "bank_name": "Access Bank", "account_number": "0123456789"}, format="json")
+    assert r.json()["status"] == "incomplete" and r.json()["missing"] == ["selfie"]
+    bad = SimpleUploadedFile("me.pdf", b"%PDF", content_type="application/pdf")
+    assert client.patch("/api/v1/dispatch/rider/", {"selfie": bad}, format="multipart").status_code == 400
+    ok = SimpleUploadedFile("me.jpg", b"\xff\xd8\xffselfie", content_type="image/jpeg")
+    r = client.patch("/api/v1/dispatch/rider/", {"selfie": ok}, format="multipart")
+    assert r.json()["status"] == "pending" and r.json()["missing"] == []
+    admin = User.objects.create_superuser("admin2@x.com", "Str0ng!Pass9", full_name="Admin", role="admin", is_staff=True)
+    client.force_authenticate(admin)
+    rider = RiderProfile.objects.get(user=user)
+    assert client.get(f"/api/v1/admin/riders/{rider.id}/selfie/").status_code == 200
+    client.force_authenticate(user)
+    assert client.get(f"/api/v1/admin/riders/{rider.id}/selfie/").status_code == 403     # riders can't fetch it

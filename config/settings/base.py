@@ -65,6 +65,8 @@ LOCAL_APPS = [
     "apps.engagement",
     "apps.complaints",
     "apps.dispatch",
+    "apps.referrals",
+    "apps.transfers",
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
@@ -140,10 +142,13 @@ REST_FRAMEWORK = {
     ),
     "DEFAULT_THROTTLE_RATES": {
         "anon": "60/min",
-        "user": "1000/day",
+        # Per-minute, not per-day: dashboards poll notifications every 30 s, so a
+        # daily cap locked active users out after a few hours.
+        "user": env("THROTTLE_USER_RATE", default="120/min"),
         "login": "10/min",     # scoped — brute-force protection
         "otp": "5/min",        # scoped — OTP request/verify abuse protection
         "complaint": "10/hour",  # scoped — complaint box spam protection
+        "transfer_lookup": "30/min",  # scoped — recipient / account-name lookups
     },
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
 }
@@ -217,6 +222,7 @@ PAYSTACK_SECRET_KEY = env("PAYSTACK_SECRET_KEY", default="")
 # Dashboard → Developers → API configuration → "Webhook signing secret" (needed with
 # restricted API keys; without it webhooks are checked with PAYSTACK_SECRET_KEY).
 PAYSTACK_WEBHOOK_SECRET = env("PAYSTACK_WEBHOOK_SECRET", default="")
+PAYSTACK_BASE_URL = env("PAYSTACK_BASE_URL", default="")   # leave empty in production
 FLUTTERWAVE_SECRET_KEY = env("FLUTTERWAVE_SECRET_KEY", default="")
 COMMISSION_RATE = Decimal("0.10")           # 10% platform fee on booking payments
 SUBSCRIPTION_PERIOD_DAYS = 30
@@ -378,3 +384,27 @@ LOGGING = {
     "handlers": {"console": {"class": "logging.StreamHandler"}},
     "root": {"handlers": ["console"], "level": "INFO"},
 }
+
+
+# ------------------------------------------------------------------ referrals
+# The inviter earns REFERRAL_REWARD (₦) in their wallet once the invitee makes a
+# first purchase (a bill of at least REFERRAL_MIN_SPEND, or a completed delivery).
+REFERRAL_ENABLED = env.bool("REFERRAL_ENABLED", default=True)
+REFERRAL_REWARD = env("REFERRAL_REWARD", default="500")
+REFERRAL_NEW_USER_BONUS = env("REFERRAL_NEW_USER_BONUS", default="0")
+REFERRAL_MIN_SPEND = env("REFERRAL_MIN_SPEND", default="1000")
+REFERRAL_MONTHLY_CAP = env.int("REFERRAL_MONTHLY_CAP", default=20)
+REFERRAL_APPLY_DAYS = env.int("REFERRAL_APPLY_DAYS", default=7)
+
+
+# ------------------------------------------------------------------ transfers
+# Wallet → wallet (instant, free) and wallet → bank (Paystack Transfers; enable
+# Transfers and turn OFF "transfer OTP" in the Paystack dashboard).
+WALLET_TRANSFER_ENABLED = env.bool("WALLET_TRANSFER_ENABLED", default=True)
+BANK_TRANSFER_ENABLED = env.bool("BANK_TRANSFER_ENABLED", default=True)
+BANK_TRANSFER_FEE = env("BANK_TRANSFER_FEE", default="50")
+TRANSFER_MIN = env("TRANSFER_MIN", default="100")
+TRANSFER_MAX_SINGLE = env("TRANSFER_MAX_SINGLE", default="500000")
+TRANSFER_DAILY_LIMIT = env("TRANSFER_DAILY_LIMIT", default="1000000")
+# Card top-ups can be spent on bills at once but transferred out only after this many hours.
+TRANSFER_TOPUP_HOLD_HOURS = env.int("TRANSFER_TOPUP_HOLD_HOURS", default=24)

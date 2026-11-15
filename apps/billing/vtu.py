@@ -207,6 +207,26 @@ class VTUClient:
         return self._cached_list(f"vtu1:cable:{provider}", "/bills/cable-packages",
                                  {"provider": provider})
 
+    def epin_stock(self):
+        """{network_slug: {denomination: packs_in_stock}}; cached for a minute."""
+        cached = cache.get("vtu1:epin-stock")
+        if cached is not None:
+            return cached
+        body = self._get("/bills/epin-stock", None)
+        raw = body.get("stock") if isinstance(body.get("stock"), dict) else (
+            (body.get("data") or {}).get("stock") if isinstance(body.get("data"), dict) else None)
+        out = {}
+        for net, counts in (raw or {}).items():
+            if isinstance(counts, dict):
+                row = {int(k): int(v or 0) for k, v in counts.items() if str(k).isdigit()}
+            elif isinstance(counts, list):     # the spec also allows [100, 200, 500, 1000]-ordered counts
+                row = {d: int(c or 0) for d, c in zip((100, 200, 500, 1000), counts)}
+            else:
+                continue
+            out[str(net).lower()] = row
+        cache.set("vtu1:epin-stock", out, 60)
+        return out
+
     def education_plans(self, provider, service_type):
         """[{variation_code, name, amount, fixed_price}]"""
         return self._cached_list(f"vtu1:edu:{provider}:{service_type}", "/bills/education-plans",

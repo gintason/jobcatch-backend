@@ -104,6 +104,20 @@ def catalogue():
     }
 
 
+def epin_stock():
+    """Packs in stock per network and value; {} when the biller can't say (don't block sales)."""
+    from .vtu import VTUClient, VTUFailed, VTUNotConfigured, VTUUnknown
+
+    try:
+        return VTUClient().epin_stock()
+    except (VTUFailed, VTUUnknown, VTUNotConfigured):
+        logger.warning("ePIN stock unavailable; not blocking purchases on it")
+        return {}
+    except Exception:  # noqa: BLE001 — an unexpected shape must not stop PIN sales
+        logger.exception("Could not read ePIN stock")
+        return {}
+
+
 def plans(kind, provider, service_type=None):
     """Data plans / TV bouquets / exam PINs, in the shape the web app uses."""
     client = VTUClient()
@@ -293,6 +307,12 @@ def build_order_fields(data):
         if not (1 <= packs <= EPIN_MAX_PACKS):
             raise ValidationError({"quantity": f"Buy between 1 and {EPIN_MAX_PACKS} packs "
                                                f"of {EPIN_PACK_SIZE} cards."})
+        in_stock = epin_stock().get(provider, {}).get(value)
+        if in_stock is not None and in_stock < packs:
+            raise ValidationError({"variation_id": (
+                f"{NETWORKS[provider]} ₦{value} PINs are out of stock right now. Try another value."
+                if in_stock == 0 else f"Only {in_stock} pack{'s' if in_stock > 1 else ''} of "
+                f"{NETWORKS[provider]} ₦{value} PINs left — reduce the quantity.")})
         fields.update(customer_id="", variation_id=str(value), quantity=packs,
                       amount=Decimal(value * EPIN_PACK_SIZE * packs),
                       variation_label=f"{NETWORKS[provider]} ₦{value} PINs · {packs} "

@@ -110,6 +110,8 @@ class _WebhookView(APIView):
             payload = json.loads(request.body or b"{}")
         except ValueError:
             return Response({"detail": "Bad payload."}, status=status.HTTP_400_BAD_REQUEST)
+        if self.route(payload):
+            return Response({"detail": "received"})
         reference, pstatus, amount = gateway.parse_event(payload)
         payment = Payment.objects.filter(reference=reference).first() if reference else None
         if payment:
@@ -118,12 +120,24 @@ class _WebhookView(APIView):
             self.handle(payment, pstatus, amount)
         return Response({"detail": "received"})
 
+    def route(self, payload):
+        """Events that aren't about a checkout payment; True when handled."""
+        return False
+
     def handle(self, payment, pstatus, amount):
         raise NotImplementedError
 
 
 class PaystackWebhookView(_WebhookView):
     gateway_name = "paystack"
+
+    def route(self, payload):
+        # transfer.success / transfer.failed / transfer.reversed → wallet withdrawals.
+        if str(payload.get("event", "")).startswith("transfer."):
+            from apps.transfers.services import handle_paystack_transfer_event
+            handle_paystack_transfer_event(payload)
+            return True
+        return False
 
     def handle(self, payment, pstatus, amount):
         # Paystack payloads are HMAC-signed with our secret, so they're trusted.

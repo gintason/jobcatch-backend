@@ -10,6 +10,7 @@ router.register("billing/giftcards/trades", views.GiftCardTradeViewSet, basename
 urlpatterns = [
     path("billing/catalogue/", views.CatalogueView.as_view(), name="billing-catalogue"),
     path("billing/variations/<str:kind>/", views.VariationsView.as_view(), name="billing-variations"),
+    path("billing/epin-stock/", views.EpinStockView.as_view(), name="billing-epin-stock"),
     path("billing/verify-customer/", views.VerifyCustomerView.as_view(), name="billing-verify"),
     path("billing/giftcards/quote/", views.GiftCardQuoteView.as_view(), name="giftcard-quote"),
     re_path(r"^billing/giftcards/(?P<what>countries|products|sell-catalog|sell-rates)/$",

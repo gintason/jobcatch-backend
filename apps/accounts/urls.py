@@ -18,4 +18,5 @@ urlpatterns = [
     path("sessions/", views.SessionListView.as_view(), name="sessions"),
     path("sessions/<uuid:session_id>/", views.SessionListView.as_view(), name="session-detail"),
     path("switch-role/", views.SwitchRoleView.as_view(), name="switch-role"),
+    path("delete-account/", views.DeleteAccountView.as_view(), name="delete-account"),
 ]

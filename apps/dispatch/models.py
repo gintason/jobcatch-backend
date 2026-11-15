@@ -43,6 +43,21 @@ def rider_document_upload_to(instance, filename):
     return f"rider-documents/{instance.user_id}/{uuid.uuid4().hex}{ext}"
 
 
+class RiderIdType(models.TextChoices):
+    NIN = "nin", "NIN slip / National ID card"
+    DRIVERS_LICENCE = "drivers_licence", "Driver's licence"
+    VOTERS_CARD = "voters_card", "Voter's card"
+    PASSPORT = "passport", "International passport"
+
+
+def rider_selfie_upload_to(instance, filename):
+    import os
+    import uuid
+
+    ext = os.path.splitext(filename)[1].lower()[:10] or ".jpg"
+    return f"rider-selfies/{instance.user_id}/{uuid.uuid4().hex}{ext}"
+
+
 class RiderProfile(BaseModel):
     user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
                                 related_name="rider_profile")
@@ -52,8 +67,14 @@ class RiderProfile(BaseModel):
     plate_number = models.CharField(max_length=20, blank=True)
     city = models.CharField(max_length=80, blank=True)
     state = models.CharField(max_length=60, blank=True)
+    # Identity: what the document is, its number, a copy of it, and a live selfie
+    # that an admin compares with the photo on the ID before approving.
+    id_type = models.CharField(max_length=20, choices=RiderIdType.choices, blank=True)
+    id_number = models.CharField(max_length=30, blank=True)
     id_document = models.FileField(storage=private_storage, upload_to=rider_document_upload_to,
                                    null=True, blank=True, max_length=255)
+    selfie = models.FileField(storage=private_storage, upload_to=rider_selfie_upload_to,
+                              null=True, blank=True, max_length=255)
     status = models.CharField(max_length=12, choices=RiderStatus.choices,
                               default=RiderStatus.INCOMPLETE, db_index=True)
     review_note = models.CharField(max_length=255, blank=True)

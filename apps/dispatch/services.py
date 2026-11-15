@@ -90,8 +90,9 @@ def rider_for(user):
 
 
 def _refresh_rider_status(rider):
-    """INCOMPLETE until vehicle, phone, ID and payout account are all in; then PENDING review."""
-    complete = bool(rider.phone and rider.vehicle_type and rider.id_document and rider.subaccount_code)
+    """INCOMPLETE until vehicle, phone, ID (type, number, copy), selfie and payout account are in; then PENDING."""
+    complete = bool(rider.phone and rider.vehicle_type and rider.id_type and rider.id_number
+                    and rider.id_document and rider.selfie and rider.subaccount_code)
     if rider.status == RiderStatus.INCOMPLETE and complete:
         rider.status = RiderStatus.PENDING
         rider.save(update_fields=["status", "updated_at"])
@@ -99,12 +100,14 @@ def _refresh_rider_status(rider):
     return rider
 
 
-def update_rider(rider, data, id_document=None):
-    for f in ("phone", "vehicle_type", "plate_number", "city", "state"):
+def update_rider(rider, data, id_document=None, selfie=None):
+    for f in ("phone", "vehicle_type", "plate_number", "city", "state", "id_type", "id_number"):
         if f in data:
             setattr(rider, f, data[f])
     if id_document is not None:
         rider.id_document = id_document
+    if selfie is not None:
+        rider.selfie = selfie
     if rider.status == RiderStatus.REJECTED:
         rider.status = RiderStatus.INCOMPLETE       # resubmitting after a rejection
     rider.save()

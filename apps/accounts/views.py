@@ -7,6 +7,8 @@ Token placement (architecture §3.2):
   - Refresh token is ALSO returned in the JSON body so React Native can store
     it in expo-secure-store. Web clients simply ignore the body copy.
 """
+import logging
+
 from django.conf import settings
 from django.utils import timezone
 from rest_framework import generics, permissions, status
@@ -35,6 +37,8 @@ from .serializers import (
 from .tasks import deliver_otp
 from .throttles import LoginThrottle, OTPThrottle
 from .tokens import tokens_for_user
+
+logger = logging.getLogger(__name__)
 
 REFRESH_COOKIE = "jc_refresh"
 
@@ -191,6 +195,13 @@ class GoogleSignInView(APIView):
             user.set_unusable_password()       # they can add one later via "forgot password"
             user.save()                         # post_save creates the role profiles
             created = True
+            code = str(request.data.get("referral_code") or "").strip()
+            if code:
+                from apps.referrals.services import attach
+                try:
+                    attach(user, code)
+                except Exception:  # noqa: BLE001 — a bad code must not block sign-in
+                    logger.info("Ignored referral code on Google sign-up")
         elif not user.is_active:
             return Response({"detail": "Account is disabled."}, status=status.HTTP_403_FORBIDDEN)
         # Google has proved they own this email address.
@@ -217,7 +228,14 @@ class CookieTokenRefreshView(APIView):
                             status=status.HTTP_401_UNAUTHORIZED)
         # Rotation + blacklist are handled by SimpleJWT settings on blacklist();
         # here we mint a fresh pair carrying current claims.
-        user = User.objects.get(id=old["user_id"])
+        user = User.objects.filter(id=old["user_id"]).first()
+        claimed = old.get("token_version")
+        # A deactivated/deleted account, or a token issued before "log out of
+        # all devices" (token_version bumped), must not mint new tokens.
+        if (user is None or not user.is_active
+                or claimed is None or int(claimed) != int(user.token_version)):
+            return Response({"detail": "Session has ended. Please sign in again."},
+                            status=status.HTTP_401_UNAUTHORIZED)
         try:
             old.blacklist()
         except Exception:  # noqa: BLE001 (blacklist app may be catching reuse)
@@ -351,3 +369,44 @@ class SwitchRoleView(APIView):
             user.role = role
             user.save(update_fields=["role"])
         return Response({"id": str(user.id), "role": user.role})
+
+class DeleteAccountView(APIView):
+    """
+    POST /auth/delete-account/ — the user closes their own account (required by
+    the App Store and Google Play). Password accounts confirm with their
+    password; Google-only accounts type "DELETE".
+
+    Financial records (payments, wallet ledger, bill orders) must be kept for
+    accounting and dispute purposes, so the account is anonymised and
+    deactivated rather than hard-deleted: personal details are wiped, every
+    session is ended, and public listings (services, jobs, rider status) are
+    taken down.
+    """
+
+    def post(self, request):
+        user = request.user
+        if user.has_usable_password():
+            if not user.check_password(str(request.data.get("password") or "")):
+                return Response({"detail": "Incorrect password."}, status=status.HTTP_400_BAD_REQUEST)
+        elif str(request.data.get("confirm") or "").strip().upper() != "DELETE":
+            return Response({"detail": 'Type DELETE to confirm.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        from apps.catalog.models import Service as ArtisanService
+        from apps.dispatch.models import RiderProfile
+        from apps.jobs.models import Job
+
+        ArtisanService.objects.filter(artisan__user=user).update(is_active=False)
+        Job.objects.filter(employer__user=user).update(is_open=False)
+        RiderProfile.objects.filter(user=user).update(is_online=False)
+
+        user.email = f"deleted-{user.id}@deleted.jobcatchonline.com"
+        user.full_name = "Deleted user"
+        user.phone = None
+        user.is_active = False
+        user.set_unusable_password()
+        user.save()
+        user.bump_token_version()
+        SessionRecord.objects.filter(user=user).delete()
+        resp = Response({"detail": "Your account has been deleted."})
+        resp.delete_cookie(REFRESH_COOKIE, path="/api/v1/auth/")
+        return resp

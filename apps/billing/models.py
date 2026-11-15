@@ -51,6 +51,10 @@ class TxnSource(models.TextChoices):
     REFUND = "refund", "Refund"
     ADJUSTMENT = "adjustment", "Admin adjustment"
     GIFTCARD_SALE = "giftcard_sale", "Gift card sale"
+    REFERRAL = "referral", "Referral reward"
+    TRANSFER_IN = "transfer_in", "Received from a JobCatch user"
+    TRANSFER_OUT = "transfer_out", "Sent to a JobCatch user"
+    WITHDRAWAL = "withdrawal", "Transfer to bank"
 
 
 class WalletTransaction(BaseModel):
