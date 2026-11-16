@@ -138,12 +138,21 @@ class MeSerializer(serializers.ModelSerializer):
     """Current user + their role-specific profile (nested, read-only for now)."""
 
     profile = serializers.SerializerMethodField()
+    photo = serializers.SerializerMethodField()
+    has_password = serializers.SerializerMethodField()
+    date_joined = serializers.DateTimeField(source="created_at", read_only=True)
 
     class Meta:
         model = User
-        fields = ("id", "email", "phone", "full_name", "role",
-                  "is_email_verified", "is_identity_verified", "profile")
+        fields = ("id", "email", "phone", "full_name", "role", "photo", "has_password", "date_joined",
+                  "is_email_verified", "is_phone_verified", "is_identity_verified", "profile")
         read_only_fields = fields
+
+    def get_photo(self, obj):
+        return obj.photo.url if obj.photo else None
+
+    def get_has_password(self, obj):
+        return obj.has_usable_password()
 
     def get_profile(self, obj):
         mapping = _PROFILE_SERIALIZERS.get(obj.role)
@@ -152,3 +161,76 @@ class MeSerializer(serializers.ModelSerializer):
         attr, serializer_cls = mapping
         profile = getattr(obj, attr, None)
         return serializer_cls(profile).data if profile else None
+
+
+class ProfileUpdateSerializer(serializers.ModelSerializer):
+    """PATCH /auth/me/ — the parts of an account a user may change themselves."""
+
+    phone = serializers.CharField(required=False, allow_blank=True, allow_null=True, max_length=20)
+    photo = serializers.FileField(required=False, allow_null=True)
+    remove_photo = serializers.BooleanField(required=False, write_only=True)
+
+    class Meta:
+        model = User
+        fields = ("full_name", "phone", "photo", "remove_photo")
+
+    def validate_full_name(self, value):
+        value = " ".join((value or "").split())
+        if len(value) < 2:
+            raise serializers.ValidationError("Enter your full name.")
+        return value[:150]
+
+    def validate_phone(self, value):
+        digits = "".join(c for c in (value or "") if c.isdigit() or c == "+")
+        if not digits:
+            return None
+        bare = digits.lstrip("+")
+        if not (10 <= len(bare) <= 14):
+            raise serializers.ValidationError("Enter a valid phone number, e.g. 0803 123 4567.")
+        if User.objects.filter(phone=digits).exclude(pk=self.instance.pk).exists():
+            raise serializers.ValidationError("This phone number is already used by another account.")
+        return digits
+
+    def validate_photo(self, value):
+        if value is None:
+            return value
+        if value.size > 5 * 1024 * 1024:
+            raise serializers.ValidationError("Choose a photo under 5 MB.")
+        from apps.common.validators import validate_image_upload
+        validate_image_upload(value)
+        head = value.read(16)
+        value.seek(0)
+        is_image = (head.startswith(b"\xff\xd8\xff") or head.startswith(b"\x89PNG\r\n\x1a\n")
+                    or (head[:4] == b"RIFF" and head[8:12] == b"WEBP") or head[4:8] == b"ftyp")
+        if not is_image:
+            raise serializers.ValidationError("That file isn't a photo. Use a JPEG, PNG or WebP image.")
+        return value
+
+    def update(self, instance, validated):
+        old = instance.photo.name if instance.photo else ""
+        storage = User._meta.get_field("photo").storage
+        if validated.pop("remove_photo", False) and "photo" not in validated:
+            validated["photo"] = None
+        if "phone" in validated and validated["phone"] != instance.phone:
+            instance.is_phone_verified = False          # a new number must be re-verified
+        for k, v in validated.items():
+            setattr(instance, k, v)
+        instance.save()
+        if old and old != (instance.photo.name if instance.photo else ""):
+            storage.delete(old)                         # don't leave replaced photos behind
+        return instance
+
+
+class ChangePasswordSerializer(serializers.Serializer):
+    current_password = serializers.CharField(required=False, allow_blank=True, write_only=True)
+    new_password = serializers.CharField(min_length=8, write_only=True)
+
+    def validate(self, data):
+        user = self.context["request"].user
+        # Google-only accounts have no password yet and may set one directly.
+        if user.has_usable_password() and not user.check_password(data.get("current_password") or ""):
+            raise serializers.ValidationError({"current_password": "Your current password is incorrect."})
+        validate_password(data["new_password"], user)
+        if user.has_usable_password() and data.get("current_password") == data["new_password"]:
+            raise serializers.ValidationError({"new_password": "Choose a password you haven't used here."})
+        return data

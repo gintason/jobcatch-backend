@@ -38,6 +38,9 @@ class User(AbstractBaseUser, PermissionsMixin, BaseModel):
     phone = models.CharField(max_length=20, unique=True, null=True, blank=True)
     full_name = models.CharField(max_length=150)
     role = models.CharField(max_length=20, choices=UserRole.choices, db_index=True)
+    # Profile photo shown in the app header, chats and to people you deal with.
+    photo = models.FileField(upload_to="avatars/", null=True, blank=True, max_length=255,
+                             validators=[validate_image_upload])
 
     is_email_verified = models.BooleanField(default=False)
     is_phone_verified = models.BooleanField(default=False)

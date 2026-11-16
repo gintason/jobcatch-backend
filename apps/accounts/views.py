@@ -13,6 +13,7 @@ from django.conf import settings
 from django.utils import timezone
 from rest_framework import generics, permissions, status
 from rest_framework.response import Response
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.views import APIView
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -26,6 +27,8 @@ from .models import UserRole
 
 from .models import OTP, OTPPurpose, SessionRecord, User
 from .serializers import (
+    ChangePasswordSerializer,
+    ProfileUpdateSerializer,
     LoginSerializer,
     MeSerializer,
     PasswordResetConfirmSerializer,
@@ -313,10 +316,35 @@ class PasswordResetConfirmView(APIView):
 
 
 class MeView(generics.RetrieveAPIView):
+    """GET /auth/me/ — the signed-in account. PATCH — edit name, phone and photo."""
     serializer_class = MeSerializer
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def get_object(self):
         return self.request.user
+
+    def patch(self, request):
+        s = ProfileUpdateSerializer(request.user, data=request.data, partial=True)
+        s.is_valid(raise_exception=True)
+        user = s.save()
+        return Response(MeSerializer(user, context={"request": request}).data)
+
+
+class ChangePasswordView(APIView):
+    """POST /auth/change-password/ {current_password, new_password}.
+
+    Signs out every other device; this device gets fresh tokens so it stays signed in.
+    """
+
+    def post(self, request):
+        s = ChangePasswordSerializer(data=request.data, context={"request": request})
+        s.is_valid(raise_exception=True)
+        user = request.user
+        user.set_password(s.validated_data["new_password"])
+        user.save(update_fields=["password", "updated_at"])
+        user.bump_token_version()
+        SessionRecord.objects.filter(user=user).delete()
+        return _auth_response(user, request)
 
 
 class SessionListView(APIView):
@@ -399,6 +427,8 @@ class DeleteAccountView(APIView):
         Job.objects.filter(employer__user=user).update(is_open=False)
         RiderProfile.objects.filter(user=user).update(is_online=False)
 
+        if user.photo:
+            user.photo.delete(save=False)
         user.email = f"deleted-{user.id}@deleted.jobcatchonline.com"
         user.full_name = "Deleted user"
         user.phone = None
