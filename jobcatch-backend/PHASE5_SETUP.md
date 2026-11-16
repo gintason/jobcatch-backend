@@ -1,0 +1,216 @@
+# JobCatch: Phase 1 updates + Phase 2 features — setup & deployment
+
+This release adds employer KYC, paid job listings, paid artisan verification,
+bill payments with a wallet (VTU.ng: airtime, data, electricity, cable TV,
+recharge-card PINs and betting-wallet funding), job seeker Pro with WhatsApp alerts and
+in-app upgrade prompts, plus the four Phase 1 fixes. Everything is wired into
+the existing apps; no manual code edits are needed after copying the files in.
+
+---
+
+## 1. Deploy order (Render)
+
+1. Push **jobcatch-backend** first. `build.sh` runs `migrate`, which:
+   - adds invoice numbers to every existing payment (historical successful
+     payments are marked as already fulfilled, so nothing is re-delivered);
+   - keeps every existing job live with its real posting date and no expiry;
+   - gives employers already CAC-verified a **verified KYC case** (marked
+     "grandfathered"), so they keep their badge and can keep posting;
+   - seeds starter job packages and upgrade prompts (both editable in admin).
+2. Set the new environment variables (section 3) on the **jobcatch-api** service.
+3. Create the **jobcatch-scheduler** cron job (it's in `render.yaml`; with a
+   Blueprint, "Sync" creates it). Give it the same secrets as the web service.
+4. Push **jobcatch-web**.
+5. Configure webhooks (section 4).
+
+> Heads-up: with `KYC_REQUIRED_TO_POST_JOBS=True` (default), employers who were
+> **not** previously verified can't post new jobs until they complete KYC, and
+> with `PAID_JOB_LISTINGS_ENABLED=True` new jobs stay drafts until paid for.
+> Set either to `False` to roll the change out gradually. Existing live jobs
+> are unaffected.
+
+## 2. What the scheduler does (`python manage.py run_scheduled_tasks`)
+
+Runs every 15 minutes; each step is idempotent and isolated:
+
+| Step | What it does |
+|---|---|
+| reconcile_payments | Re-verifies checkouts the webhook missed; re-runs failed fulfilment; closes checkouts abandoned > 48 h |
+| requery_bill_orders | Asks VTU.ng about orders still "processing"; refunds to wallet if the biller failed them |
+| expire_job_listings | Closes jobs past their listing period and notifies the employer; expires unused credit packs |
+| expire_subscriptions | Ends lapsed Premium/Pro/Seeker Pro plans and removes the featured flag |
+| renewal_reminders | One "ends in 3 days" reminder per plan |
+| upgrade_nudges | Weekly in-app + email nudge (Seeker Pro / artisan verification / upgrade), max once a week each |
+
+Expiry is also enforced at query time, so a late cron never shows a stale job.
+
+## 3. Environment variables
+
+All are optional with safe defaults. See `.env.example` for the full list.
+
+| Variable | Default | Notes |
+|---|---|---|
+| `FLUTTERWAVE_SECRET_KEY` | — | Enables Flutterwave at checkout |
+| `FLUTTERWAVE_WEBHOOK_HASH` | — | The "secret hash" you set in the Flutterwave dashboard |
+| `DEFAULT_PAYMENT_GATEWAY` | `paystack` | Plans, listing packages, verification fee, Seeker Pro, CV service |
+| `BILLING_GATEWAY` | `flutterwave` | **Bill payments and wallet top-ups always use this gateway.** Requires `FLUTTERWAVE_SECRET_KEY` + `FLUTTERWAVE_WEBHOOK_HASH`; without them card bill payments/top-ups are refused (wallet purchases still work) |
+| `FRONTEND_URL` | `https://jobcatchonline.com` | Links in WhatsApp alerts |
+| `PAID_JOB_LISTINGS_ENABLED` | `True` | `False` = jobs publish free and never expire |
+| `KYC_REQUIRED_TO_POST_JOBS` | `True` | |
+| `KYC_AUTO_APPROVE` | `False` | `True` = verify instantly when CAC, TIN and NIN lookups all pass |
+| `KYC_PROVIDER` | `manual` | `dojah` for live CAC/TIN/NIN lookups |
+| `DOJAH_APP_ID`, `DOJAH_SECRET_KEY` | — | From the Dojah dashboard (use `DOJAH_BASE_URL=https://sandbox.dojah.io` to test) |
+| `SMS_BACKEND` | `console` | **Set to `termii` in production**, or phone OTPs are only logged |
+| `TERMII_API_KEY`, `TERMII_SENDER_ID` | — | Sender ID must be approved by Termii |
+| `ARTISAN_VERIFICATION_FEE` | `5000` | Naira |
+| `SEEKER_PRO_PRICE` / `SEEKER_PRO_PERIOD_DAYS` | `3000` / `30` | |
+| `WHATSAPP_BACKEND` | `console` | `cloud_api` to send real WhatsApp alerts |
+| `WHATSAPP_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID` | — | Meta WhatsApp Cloud API |
+| `WHATSAPP_JOB_ALERT_TEMPLATE` | `job_alert` | Approved template with 3 body variables: title, company, link |
+| `VTU_BASE_URL` | `https://api.vtu.ng/v1` | VTU.ng Partner API. Use `https://sandbox.vtu.ng/v1` with a sandbox key to test |
+| `VTU_API_KEY` | — | **Secret** key from app.vtu.ng → Profile → Developer (`vtu_sk_live_…`, or `vtu_sk_test_…` for sandbox). Keys only work against their own environment |
+| `VTU_WEBHOOK_TOKEN` | — | Long random string; it's the last part of the webhook URL |
+| `BILL_FEE_AIRTIME` … `BILL_FEE_TV`, `BILL_FEE_EPINS`, `BILL_FEE_BETTING` | `0` | Optional flat convenience fee per purchase |
+| `BILL_EDUCATION_ENABLED` | `True` | WAEC result checker / registration and JAMB PINs |
+| `BILL_GIFTCARD_BUY_ENABLED`, `BILL_GIFTCARD_SELL_ENABLED`, `BILL_RMB_ENABLED` | `False` | Gift card buying/selling and RMB (China) payments. Need VTU.ng **KYB**; turn on only after Paystack/Flutterwave confirm in writing they allow them. Gift card sale payouts go to the customer's JobCatch wallet (no bank withdrawals) |
+| `GIFTCARD_BUY_MARGIN_PERCENT`, `GIFTCARD_SELL_MARGIN_PERCENT`, `RMB_MARGIN_PERCENT` | `2`, `5`, `2` | JobCatch's margin on top of / taken from VTU.ng's price |
+| `BILL_BETTING_ENABLED` | `True` | `False` hides betting-wallet funding (tab, catalogue and API) without a deploy |
+| `COMPLAINTS_NOTIFY_EMAIL` | `info@jobcatchonline.com` | Support inbox copied on every new complaint |
+| `PRIVATE_MEDIA_ROOT` | `<RENDER_DISK_PATH>/_private` | KYC documents; never served by `/media/` |
+
+## 4. Webhooks & external dashboards
+
+| Where | URL / setting |
+|---|---|
+| Paystack → Settings → API Keys & Webhooks | `https://<api-domain>/api/v1/payments/webhook/paystack/` |
+| Flutterwave → Settings → Webhooks | `https://<api-domain>/api/v1/payments/webhook/flutterwave/` and set the **Secret hash** = `FLUTTERWAVE_WEBHOOK_HASH` |
+| app.vtu.ng → Profile → Developer → Webhooks | `https://<api-domain>/api/v1/billing/webhook/vtu/<VTU_WEBHOOK_TOKEN>/`. Live keys need KYC Tier 2 + an Agent Tier; sandbox keys need KYC Tier 2. Webhooks are only a trigger: every event is re-checked with VTU.ng's API before an order moves |
+| Paystack/Flutterwave redirect | `PAYMENT_CALLBACK_URL` (unchanged): `https://jobcatchonline.com/payments/callback` |
+
+**Fund your VTU.ng wallet.** Bill purchases are paid from your VTU.ng reseller
+balance; if it runs out, purchases fail and customers are refunded to their
+JobCatch wallet automatically. Watch the balance in VTU.ng.
+
+## 5. Admin
+
+- **In-app review dashboard:** `/admin/reviews` (log in as an admin user):
+  employer KYC and artisan verification queues, document viewer, automated
+  check results, approve/reject/revoke/override, full audit history.
+- **Complaint box:** anyone (signed in or not) can report an artisan, wrong
+  billing, a payment, an employer or anything else at `/complaints`. Each
+  complaint records name, email, phone, the date of the report, an optional
+  incident date, artisan / transaction reference and an optional private
+  attachment, and gets a reference (`JCC-YYYYMMDD-XXXXXX`). The complainant gets
+  an acknowledgement email; admins get an in-app alert and
+  `COMPLAINTS_NOTIFY_EMAIL` gets a copy. Handle them in `/admin/reviews` →
+  **Complaints** (status, reply to the complainant, internal note). Replies and
+  status changes are emailed; complainants can track status at `/complaints`
+  with their reference + email.
+- **Django admin** additions: Employer KYC cases, Job packages (prices/credits/
+  duration editable inline), Package purchases, Bill orders (requery action),
+  Wallets & ledger (read-only), Upgrade prompts (copy, CTA, cooldown; shows
+  shown/clicked/dismissed counts), Job alert subscriptions, Payments (with the
+  event timeline and a "re-verify with gateway" action).
+
+## 6. Local development
+
+```bash
+pip install -r requirements.txt
+python manage.py migrate
+python manage.py runserver 8080
+python manage.py run_scheduled_tasks        # run the scheduler once
+pytest                                      # all pass except 4 pre-existing AI-chatbot tests
+```
+
+With no keys set, KYC lookups are "manual", SMS/WhatsApp print to the console,
+and bill purchases are refunded with "not configured".
+
+## 7. Notes & known limits
+
+- **Dojah endpoints**: CAC uses `/api/v1/kyc/cac/basic`, TIN `/api/v1/kyc/tin`,
+  NIN `/api/v1/kyc/nin`. The NIN path couldn't be confirmed against Dojah's current
+  reference, so all three are overridable with `DOJAH_*_PATH`. Test in the Dojah
+  sandbox before setting `KYC_PROVIDER=dojah`.
+- **Director NIN** is stored in the database in plain text (visible only to
+  admins, masked for the employer). Add field-level encryption if your
+  compliance needs require it.
+- Plans (Premium/Pro/Seeker Pro) are one-off 30-day payments; there is no
+  automatic card re-billing. Renewing early stacks the days.
+- The legacy "Verifications" document flow and `/admin/job-videos/` still work.
+  The **Verified Artisan** badge is now granted by the paid application review.
+- Existing documents uploaded through the old Verification flow remain in public
+  `/media/verifications/`; new KYC and artisan documents use private storage.
+
+
+## 8. Dispatch & delivery
+
+- **Customers** book at `/dispatch`: package delivery or food/errands, by bike, keke, car or van.
+  The fare is distance-based (base + per km, rounded to ₦50; errands add a surcharge). Edit the
+  prices in Django admin → **Delivery rates**.
+- **Riders** sign up at `/dashboard/rider`: vehicle, phone, government ID, then their bank
+  account, which is verified with Paystack and registered as a Paystack **subaccount**. Admins
+  approve riders in `/admin/reviews` → **Riders**.
+- **Flow:** a nearby online rider accepts → confirms pickup → the customer pays the fee in the
+  app → Paystack splits it (`DISPATCH_RIDER_SHARE_PERCENT`, default 80%, to the rider's bank; the
+  rest to JobCatch; Paystack's fee is taken from JobCatch's share) → the rider completes with the
+  recipient's 4-digit code. Unaccepted requests expire (scheduler step `expire_delivery_requests`).
+- **Requirements:** `PAYSTACK_SECRET_KEY` (live) on a Paystack account allowed to use **split
+  payments / subaccounts**. Tell Paystack about deliveries before launch.
+- For errands, the customer pays the rider for the items directly on delivery; only the delivery
+  fee goes through JobCatch.
+- **Rider identity:** riders must give an ID type and number, upload the ID, and take a **selfie**
+  before their application is reviewed. In `/admin/reviews` → **Riders**, compare the selfie with
+  the ID photo, and the ID name with the payout account name, before approving.
+
+
+## 9. Referrals (invite & earn)
+
+- Every user has a code and link (`/referrals` on web, **Account → Invite & earn** in the app).
+- A friend who signs up with it (email or Google), or adds it within `REFERRAL_APPLY_DAYS` days,
+  is linked to the inviter. The inviter gets `REFERRAL_REWARD` in their wallet after the friend's
+  **first purchase**: a successful bill of at least `REFERRAL_MIN_SPEND`, or a completed delivery.
+  Optional `REFERRAL_NEW_USER_BONUS` for the friend. At most `REFERRAL_MONTHLY_CAP` rewards per
+  inviter per month. Admins can mark suspicious referrals "not eligible" in Django admin → Referrals.
+
+| Variable | Default |
+|---|---|
+| `REFERRAL_ENABLED` | `True` |
+| `REFERRAL_REWARD` | `500` |
+| `REFERRAL_NEW_USER_BONUS` | `0` |
+| `REFERRAL_MIN_SPEND` | `1000` |
+| `REFERRAL_MONTHLY_CAP` | `20` |
+| `REFERRAL_APPLY_DAYS` | `7` |
+
+
+## 10. Transfers (wallet → bank, wallet → wallet)
+
+- `/transfers` on web, **Send** on the app's wallet card. Every transfer needs a 4-digit
+  transaction PIN (5 wrong tries lock transfers for 30 minutes; reset with the account password).
+- **Wallet → wallet:** instant and free, by the recipient's email or phone number.
+- **Wallet → bank:** paid out with **Paystack Transfers**. The wallet is debited (amount + fee);
+  a failed or reversed transfer is refunded automatically, once. Outcomes arrive by webhook
+  (`transfer.success / failed / reversed`, on the same Paystack webhook URL) and are re-checked by
+  the scheduler step `requery_bank_transfers`.
+- **Before turning it on in Paystack:**
+  1. Ask Paystack to enable **Transfers** on the live account (they review this separately).
+  2. Dashboard → Settings → Preferences → **disable "Confirm transfers with OTP"**, otherwise
+     every transfer stops for an OTP and is refunded.
+  3. Keep enough money in the Paystack **balance** — payouts are paid from it.
+- Card top-ups are spendable on bills at once but can be transferred out only after
+  `TRANSFER_TOPUP_HOLD_HOURS` (stops stolen-card cash-outs).
+
+| Variable | Default |
+|---|---|
+| `WALLET_TRANSFER_ENABLED` | `True` |
+| `BANK_TRANSFER_ENABLED` | `True` |
+| `BANK_TRANSFER_FEE` | `50` |
+| `TRANSFER_MIN` | `100` |
+| `TRANSFER_MAX_SINGLE` | `500000` |
+| `TRANSFER_DAILY_LIMIT` | `1000000` |
+| `TRANSFER_TOPUP_HOLD_HOURS` | `24` |
+
+
+## 11. API rate limit
+
+`THROTTLE_USER_RATE` (default `120/min`). The old `1000/day` limit locked active users out after a
+few hours because dashboards poll notifications every 30 seconds.
