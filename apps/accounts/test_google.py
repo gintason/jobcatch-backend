@@ -71,3 +71,28 @@ def test_disabled_account_cannot_sign_in():
                              is_active=False)
     with _google():
         assert _post().status_code == 403
+
+
+def test_settings_ignore_spaces_and_always_include_jobcatch_clients(monkeypatch):
+    """A GOOGLE_CLIENT_IDS value like 'a, b' (space after the comma) must not lock out the web client."""
+    import importlib
+
+    monkeypatch.setenv("GOOGLE_CLIENT_IDS", " other-app.apps.googleusercontent.com ,  ")
+    from config.settings import base
+    try:
+        importlib.reload(base)
+        assert "other-app.apps.googleusercontent.com" in base.GOOGLE_CLIENT_IDS
+        assert WEB in base.GOOGLE_CLIENT_IDS
+        assert all(c == c.strip() and c for c in base.GOOGLE_CLIENT_IDS)
+    finally:
+        monkeypatch.delenv("GOOGLE_CLIENT_IDS")
+        importlib.reload(base)
+
+
+def test_token_issued_to_the_ios_client_is_accepted():
+    ios = "306763553702-5kvmuchb5s8ee3gjgpqb3mhnqeminfac.apps.googleusercontent.com"
+    from django.conf import settings
+    assert ios in settings.GOOGLE_CLIENT_IDS
+    with _google(aud=ios):
+        r = _post()
+    assert r.status_code == 201, r.json()

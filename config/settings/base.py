@@ -163,8 +163,16 @@ SPECTACULAR_SETTINGS = {
 # ------------------------------------------------------------------ JWT
 # "Sign in with Google": OAuth client IDs whose ID tokens we accept (web now;
 # add the Android / iOS client IDs here for the mobile app). Not secret.
-GOOGLE_CLIENT_IDS = env.list("GOOGLE_CLIENT_IDS", default=[
-    "306763553702-jalc00es33k28etpj8shsufela5486t1.apps.googleusercontent.com"])
+# JobCatch's own OAuth clients (public IDs, not secrets): web, Android, iOS. The apps ask Google
+# for tokens addressed to the web client, but all three are accepted. GOOGLE_CLIENT_IDS on Render
+# adds to these (comma-separated; spaces are ignored).
+_JOBCATCH_GOOGLE_CLIENTS = [
+    "306763553702-jalc00es33k28etpj8shsufela5486t1.apps.googleusercontent.com",   # web
+    "306763553702-q1os8sl8o30e412m51bi4a47uvkijnj3.apps.googleusercontent.com",   # Android
+    "306763553702-5kvmuchb5s8ee3gjgpqb3mhnqeminfac.apps.googleusercontent.com",   # iOS
+]
+GOOGLE_CLIENT_IDS = list(dict.fromkeys(
+    [c.strip() for c in env.list("GOOGLE_CLIENT_IDS", default=[]) if c.strip()] + _JOBCATCH_GOOGLE_CLIENTS))
 
 SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(minutes=env("ACCESS_TOKEN_LIFETIME_MIN")),

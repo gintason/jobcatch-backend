@@ -42,6 +42,8 @@ def verify_id_token(token):
         raise GoogleTokenError("Google sign-in is temporarily unavailable.") from exc
 
     if info.get("aud") not in settings.GOOGLE_CLIENT_IDS:
+        # Client IDs are public; logging them makes a misconfigured GOOGLE_CLIENT_IDS obvious.
+        logger.warning("Google token for unknown client: aud=%s azp=%s", info.get("aud"), info.get("azp"))
         raise GoogleTokenError("This Google sign-in was not meant for JobCatch.")
     if info.get("iss") not in ISSUERS:
         raise GoogleTokenError("Invalid Google sign-in.")
