@@ -1,0 +1,29 @@
+{% extends "admin/base_site.html" %}
+{% block breadcrumbs %}
+<div class="breadcrumbs">
+  <a href="{% url 'admin:index' %}">Home</a> &rsaquo;
+  <a href="{% url 'admin:billing_billorder_changelist' %}">Bill orders</a> &rsaquo;
+  <a href="{% url 'admin:billing_billorder_change' order.pk %}">{{ order.receipt_number }}</a> &rsaquo; Refund to wallet
+</div>
+{% endblock %}
+{% block content %}
+<h1>Refund to the customer's wallet</h1>
+<table style="margin-bottom:20px">
+  <tr><th style="text-align:left;padding:4px 16px 4px 0">Customer</th><td>{{ order.user.full_name }} &lt;{{ order.user.email }}&gt;</td></tr>
+  <tr><th style="text-align:left;padding:4px 16px 4px 0">Receipt</th><td>{{ order.receipt_number }}</td></tr>
+  <tr><th style="text-align:left;padding:4px 16px 4px 0">Purchase</th><td>{{ order.get_service_display }} · {{ order.provider|upper }} · {{ order.variation_label }}</td></tr>
+  <tr><th style="text-align:left;padding:4px 16px 4px 0">Recipient</th><td>{{ order.customer_id|default:"—" }}</td></tr>
+  <tr><th style="text-align:left;padding:4px 16px 4px 0">Paid with</th><td>{{ order.get_payment_method_display }}</td></tr>
+  <tr><th style="text-align:left;padding:4px 16px 4px 0">Status</th><td>{{ order.get_status_display }}</td></tr>
+  <tr><th style="text-align:left;padding:4px 16px 4px 0">VTU.ng reference</th><td>{{ order.provider_order_id|default:"—" }}</td></tr>
+  <tr><th style="text-align:left;padding:4px 16px 4px 0">Amount to refund</th><td><strong>₦{{ order.total }}</strong> (everything the customer paid, incl. fee)</td></tr>
+</table>
+{% if error %}<p class="errornote">{{ error }}</p>{% endif %}
+<p>Only refund when the customer didn't receive what they paid for <strong>and</strong> the biller (VTU.ng) has confirmed it wasn't delivered — or has reversed it. The money goes to the customer's JobCatch wallet (not back to their card), the order is marked <em>Refunded</em>, and the customer is notified. It can only be done once.</p>
+<form method="post">{% csrf_token %}
+  <p><label for="reason"><strong>Reason</strong> (kept on the order and shown to the customer)</label><br>
+  <textarea id="reason" name="reason" rows="3" cols="70" required minlength="5" placeholder="e.g. VTU.ng confirmed MTN did not deliver (ticket #1234)">{{ reason }}</textarea></p>
+  <input type="submit" class="default" value="Refund ₦{{ order.total }} to wallet" style="background:#ba2121">
+  <a href="{% url 'admin:billing_billorder_change' order.pk %}" class="button cancel-link" style="margin-left:10px">Cancel</a>
+</form>
+{% endblock %}

@@ -817,6 +817,55 @@ def _fail_and_refund(order, reason, body=None):
     return order
 
 
+REFUNDABLE_BY_ADMIN = (BillStatus.SUCCESSFUL, BillStatus.PROCESSING, BillStatus.QUEUED)
+
+
+def admin_refund(order, *, admin, reason):
+    """
+    Staff refund of a bill order to the customer's JobCatch wallet — e.g. the biller
+    reported "completed" but the customer never received the airtime/data and the
+    biller has confirmed non-delivery. Refunds the full amount paid (incl. fee),
+    exactly once, records who did it and why, and tells the customer.
+    """
+    reason = " ".join(str(reason or "").split())
+    if len(reason) < 5:
+        raise ValidationError({"reason": "Give a short reason for the refund (it's kept on the order)."})
+    with transaction.atomic():
+        order = BillOrder.objects.select_for_update().get(pk=order.pk)
+        if order.status == BillStatus.REFUNDED:
+            raise ValidationError({"detail": "This order has already been refunded."})
+        if order.status not in REFUNDABLE_BY_ADMIN:
+            raise ValidationError({"detail": f"A {order.get_status_display().lower()} order can't be refunded — "
+                                             "no money was taken, or it was already returned."})
+        if not (order.payment_method == PaymentMethod.WALLET or order.payment_id):
+            raise ValidationError({"detail": "No payment was received for this order."})
+        _post(order.user, kind=TxnKind.CREDIT, source=TxnSource.REFUND, amount=order.total,
+              reference=f"refund:{order.request_id}", order=order,
+              description=f"Refund · {order.get_service_display()} {order.customer_id}".strip())
+        previous = order.status
+        order.status = BillStatus.REFUNDED
+        order.refunded_at = timezone.now()
+        order.provider_message = f"Refunded by JobCatch: {reason}"[:255]
+        order.response = {**(order.response or {}), "admin_refund": {
+            "by": getattr(admin, "email", str(admin)), "at": order.refunded_at.isoformat(),
+            "reason": reason, "previous_status": previous}}
+        order.save(update_fields=["status", "refunded_at", "provider_message", "response", "updated_at"])
+        transaction.on_commit(lambda: _notify_admin_refund(order, reason))
+    logger.info("Admin refund of %s (₦%s) by %s: %s", order.request_id, order.total, admin, reason)
+    return order
+
+
+def _notify_admin_refund(order, reason):
+    from apps.notifications.services import notify
+    try:
+        notify(order.user, kind="bill_alert", title=f"₦{order.total:,.2f} refunded to your wallet",
+               body=f"We've refunded your {order.variation_label or order.get_service_display()} purchase"
+                    f"{f' for {order.customer_id}' if order.customer_id else ''}. Reason: {reason}",
+               data={"bill_order_id": str(order.id), "url": f"/bills/receipt/{order.id}"})
+    except Exception:  # noqa: BLE001 — never undo a refund over a notification
+        logger.exception("Refund notification failed for %s", order.request_id)
+
+
 def requery_order(order):
     """
     Refresh an order we have no final answer for. Looks it up by VTU.ng's

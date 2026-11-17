@@ -696,3 +696,82 @@ def test_stock_outage_never_blocks_pin_sales_and_endpoint_reports_stock(client, 
     with patch.object(VTUClient, "_raw", FakeVTU({"GET /bills/epin-stock": stock})):
         body = APIClient().get("/api/v1/billing/epin-stock/").json()
     assert body == {"stock": {"mtn": {"100": 3, "500": 0}}, "known": True}
+
+
+# ---------------------------------------------------------------- admin refund to wallet
+def _delivered_order(client, user, amount="1500"):
+    _fund(user, 5000)
+    with patch.object(VTUClient, "_raw", FakeVTU({"POST /bills/airtime": _created("completed")})):
+        order_id = _buy_airtime(client, user, amount=amount).json()["id"]
+    order = BillOrder.objects.get(pk=order_id)
+    assert order.status == BillStatus.SUCCESSFUL
+    return order
+
+
+def _admin():
+    return User.objects.create_superuser("ops@jobcatch.test", "Str0ng!Pass9", full_name="Ops", role="admin", is_staff=True)
+
+
+def test_admin_refunds_a_delivered_order_once(client, user, django_capture_on_commit_callbacks):
+    from apps.billing.services import admin_refund
+    from apps.notifications.models import Notification
+    order = _delivered_order(client, user)
+    assert Wallet.objects.get(user=user).balance == Decimal("3500")
+    with django_capture_on_commit_callbacks(execute=True):
+        admin_refund(order, admin=_admin(), reason="VTU.ng confirmed MTN did not deliver")
+    order.refresh_from_db()
+    assert order.status == BillStatus.REFUNDED and order.refunded_at
+    assert order.response["admin_refund"]["by"] == "ops@jobcatch.test"
+    assert order.response["admin_refund"]["previous_status"] == "successful"
+    assert Wallet.objects.get(user=user).balance == Decimal("5000")
+    n = Notification.objects.get(user=user, kind="bill_alert", title__startswith="₦1,500.00 refunded")
+    assert "MTN did not deliver" in n.body
+    from rest_framework.exceptions import ValidationError
+    with pytest.raises(ValidationError):
+        admin_refund(order, admin=User.objects.get(email="ops@jobcatch.test"), reason="again please")
+    assert Wallet.objects.get(user=user).balance == Decimal("5000")          # never twice
+    assert WalletTransaction.objects.filter(reference=f"refund:{order.request_id}").count() == 1
+
+
+def test_admin_refund_needs_a_reason_and_a_paid_order(client, user):
+    from rest_framework.exceptions import ValidationError
+
+    from apps.billing.services import admin_refund
+    order = _delivered_order(client, user)
+    with pytest.raises(ValidationError):
+        admin_refund(order, admin=_admin(), reason="no")
+    unpaid = BillOrder.objects.create(user=user, service="airtime", provider="mtn", customer_id="08031234567",
+                                      amount=Decimal("500"), total=Decimal("500"), payment_method="card",
+                                      status=BillStatus.AWAITING_PAYMENT, request_id="unpaid-1")
+    with pytest.raises(ValidationError):
+        admin_refund(unpaid, admin=User.objects.get(email="ops@jobcatch.test"), reason="customer asked")
+
+
+def test_refund_button_page_in_django_admin(client, user):
+    order = _delivered_order(client, user)
+    staff = _admin()
+    from django.test import Client
+    web = Client()
+    web.force_login(staff)
+    page = web.get(f"/admin/billing/billorder/{order.pk}/refund/")
+    assert page.status_code == 200 and b"Refund to the customer" in page.content
+    listing = web.get("/admin/billing/billorder/")
+    assert b"Refund to wallet" in listing.content
+    r = web.post(f"/admin/billing/billorder/{order.pk}/refund/", {"reason": "x"})
+    assert r.status_code == 200 and b"short reason" in r.content                    # form re-shown with the error
+    r = web.post(f"/admin/billing/billorder/{order.pk}/refund/", {"reason": "Not delivered per VTU.ng ticket 991"})
+    assert r.status_code == 302
+    order.refresh_from_db()
+    assert order.status == BillStatus.REFUNDED
+    customer = Client()
+    customer.force_login(user)
+    assert customer.get(f"/admin/billing/billorder/{order.pk}/refund/").status_code == 302   # not staff → login page
+
+
+def test_admin_search_finds_order_by_receipt_number(client, user):
+    from django.test import Client
+    order = _delivered_order(client, user)
+    web = Client(); web.force_login(_admin())
+    r = web.get("/admin/billing/billorder/", {"q": order.receipt_number})
+    assert r.status_code == 200 and str(order.pk).encode() in r.content
+    assert str(order.pk).encode() not in web.get("/admin/billing/billorder/", {"q": "JCB-20260101-00000000"}).content
