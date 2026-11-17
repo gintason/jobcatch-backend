@@ -47,6 +47,16 @@ def log_event(payment, kind, *, source="", note="", payload=None):
     )
 
 
+def callback_url():
+    """Where the gateway sends the payer afterwards: the website, or — for
+    checkouts started in the mobile app — a page that reopens the app."""
+    from .middleware import current_client
+
+    if current_client() == "mobile":
+        return settings.PAYMENT_APP_CALLBACK_URL
+    return settings.PAYMENT_CALLBACK_URL
+
+
 def start_checkout(*, user, purpose, amount, description, gateway=None,
                    metadata=None, booking=None, before_gateway=None, split=None, commission=None):
     """
@@ -77,7 +87,7 @@ def start_checkout(*, user, purpose, amount, description, gateway=None,
     try:
         result = gw.initialize(
             reference=payment.reference, amount=amount, email=user.email,
-            callback_url=settings.PAYMENT_CALLBACK_URL,
+            callback_url=callback_url(),
             name=getattr(user, "full_name", ""), description=description,
             **({"split": split} if split else {}),
         )

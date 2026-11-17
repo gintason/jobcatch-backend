@@ -81,6 +81,7 @@ MIDDLEWARE = [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    "apps.payments.middleware.ClientChannelMiddleware",
 ]
 
 ROOT_URLCONF = "config.urls"
@@ -218,6 +219,9 @@ DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="JobCatch <info@jobcatcho
 # ------------------------------------------------------------------ CORS
 CORS_ALLOWED_ORIGINS = env("CORS_ALLOWED_ORIGINS")
 CORS_ALLOW_CREDENTIALS = True  # needed for the httpOnly refresh cookie on web
+from corsheaders.defaults import default_headers  # noqa: E402
+
+CORS_ALLOW_HEADERS = (*default_headers, "x-jobcatch-client")
 
 # ------------------------------------------------------------------ files
 # JPG/PNG/PDF/MP4 only — enforced by validators in apps.common.validators
@@ -249,6 +253,11 @@ PAYMENT_CALLBACK_URL = env(
 )
 # Public site, used for links in emails / WhatsApp alerts.
 FRONTEND_URL = env("FRONTEND_URL", default="https://jobcatchonline.com").rstrip("/")
+# Checkouts started from the mobile app (X-JobCatch-Client: mobile) return here;
+# that page hands the user straight back to the app (jobcatch://payment-complete).
+PAYMENT_APP_CALLBACK_URL = env(
+    "PAYMENT_APP_CALLBACK_URL", default=f"{FRONTEND_URL}/payments/callback/app"
+)
 
 # Which gateway a checkout uses when the client doesn't ask for one.
 DEFAULT_PAYMENT_GATEWAY = env("DEFAULT_PAYMENT_GATEWAY", default="paystack")
