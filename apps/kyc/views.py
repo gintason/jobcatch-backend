@@ -30,6 +30,8 @@ from rest_framework.authentication import SessionAuthentication
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+
+from apps.payments.services import CheckoutError
 from rest_framework.views import APIView
 
 from apps.accounts.authentication import VersionedJWTAuthentication
@@ -105,8 +107,12 @@ class SubmitKYCView(APIView):
 
     def post(self, request):
         kyc = services.kyc_for(request.user.employer_profile)
-        kyc = services.submit(kyc, request)
-        return Response(EmployerKYCSerializer(kyc).data)
+        try:
+            kyc, url, reference = services.submit(kyc, request, gateway=request.data.get("gateway") or None)
+        except CheckoutError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
+        # authorization_url is set when the verification fee must be paid first.
+        return Response({**EmployerKYCSerializer(kyc).data, "authorization_url": url, "reference": reference})
 
 
 class MyKYCDocumentViewSet(mixins.CreateModelMixin, mixins.DestroyModelMixin,

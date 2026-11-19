@@ -300,6 +300,9 @@ TERMII_CHANNEL = env("TERMII_CHANNEL", default="dnd")  # dnd reaches DND numbers
 
 # --- Artisan verification + upgrades ---
 ARTISAN_VERIFICATION_FEE = Decimal(env("ARTISAN_VERIFICATION_FEE", default="5000"))
+# One-off fee an employer pays when submitting business verification (KYC).
+# Resubmitting after a rejection is free. Set to 0 to make verification free.
+EMPLOYER_VERIFICATION_FEE = Decimal(env("EMPLOYER_VERIFICATION_FEE", default="8000"))
 
 # --- Job seeker Pro plan ---
 SEEKER_PRO_PRICE = Decimal(env("SEEKER_PRO_PRICE", default="3000"))

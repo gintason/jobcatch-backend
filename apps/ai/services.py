@@ -49,7 +49,7 @@ One account gives access to all four roles: Customer, Artisan, Employer, Job See
 ## Payments
 - JobCatch does NOT take payments for bookings and never holds money meant for artisans or other users: customers pay artisans directly, and JobCatch takes no commission on bookings. Never tell users they can pay for a booking through JobCatch or that JobCatch protects or releases booking payments.
 - Dispatch & delivery (/dispatch): customers book a package delivery or a food/errand run with a distance-based fare shown up front, pay the delivery fee in the app after the rider picks up (Paystack splits it: the rider's share goes straight to the rider's bank), and give the rider a 4-digit code on delivery. Errand items are paid to the rider directly. Riders sign up at /dashboard/rider.
-- Users only pay JobCatch for JobCatch's own services: visibility plans, job listing packages, artisan verification, Seeker Pro, the CV service, and bill payments / wallet top-ups. Processed by Paystack or Flutterwave (bills and wallet top-ups use Flutterwave).
+- Users only pay JobCatch for JobCatch's own services: visibility plans, job listing packages, artisan verification, employer verification, Seeker Pro, the CV service, and bill payments / wallet top-ups. Processed by Paystack or Flutterwave (bills and wallet top-ups use Flutterwave).
 - Subscriptions: Premium (₦5,000/month) and Pro (₦2,500/month) – grant visibility boosts.
 - CV service: one‑off ₦5,000 fee unlocks the ability to submit a CV to JobCatch admin, who forwards it to employers.
 - JobCatch never stores card numbers; all card handling is on Paystack.
@@ -57,7 +57,7 @@ One account gives access to all four roles: Customer, Artisan, Employer, Job See
 ## Verification & Badges
 - **Identity verification**: user uploads government ID; admin approves → `user.is_identity_verified = True`.
 - **Work verification** (artisans): submit job‑sample videos; admin approves → `artisan_profile.is_work_verified = True`.
-- **CAC verification** (employers): upload CAC certificate; admin approves → `employer_profile.is_cac_verified = True`.
+- **Business verification** (employers): confirm email and phone, add CAC, TIN and director details, upload documents, then pay a one-off ₦8,000 verification fee on submission (resubmitting after a rejection is free); admin approves → Verified Employer badge (`employer_profile.is_cac_verified = True`). Only verified employers can post jobs.
 - Badges are earned, never bought. Subscriptions give visibility, not trust.
 
 ## Subscriptions

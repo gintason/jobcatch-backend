@@ -34,6 +34,7 @@ class PaymentPurpose(models.TextChoices):
     SUBSCRIPTION = "subscription", "Subscription"
     JOB_POSTING = "job_posting", "Job listing package"
     VERIFICATION = "verification", "Artisan verification fee"
+    EMPLOYER_VERIFICATION = "employer_verify", "Employer verification fee"
     CV_SERVICE = "cv_service", "CV Service"
     SEEKER_PRO = "seeker_pro", "Job seeker Pro plan"
     WALLET_TOPUP = "wallet_topup", "Wallet top-up"

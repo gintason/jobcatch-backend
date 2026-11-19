@@ -20,6 +20,8 @@ pytestmark = pytest.mark.django_db
 def private_media(tmp_path, settings):
     settings.PRIVATE_MEDIA_ROOT = str(tmp_path / "private")
     settings.MEDIA_ROOT = str(tmp_path / "media")
+    # These tests cover the review flow; the paid-submission flow is in test_fee.py.
+    settings.EMPLOYER_VERIFICATION_FEE = 0
 
 
 @pytest.fixture

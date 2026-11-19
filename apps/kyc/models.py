@@ -78,6 +78,12 @@ class EmployerKYC(BaseModel):
     checks = models.JSONField(default=dict, blank=True)
 
     # --- review ---
+    # --- verification fee (settings.EMPLOYER_VERIFICATION_FEE) ---
+    fee_amount = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    fee_paid_at = models.DateTimeField(null=True, blank=True)
+    payment = models.ForeignKey(
+        "payments.Payment", null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
+    )
     submitted_at = models.DateTimeField(null=True, blank=True)
     reviewed_at = models.DateTimeField(null=True, blank=True)
     reviewed_by = models.ForeignKey(
@@ -115,6 +121,10 @@ class EmployerKYC(BaseModel):
             return to_local(self.contact_phone) == to_local(self.phone_verified_value)
         except InvalidPhone:
             return False
+
+    @property
+    def fee_paid(self):
+        return self.fee_paid_at is not None
 
     @property
     def is_editable(self):

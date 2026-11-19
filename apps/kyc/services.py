@@ -185,13 +185,54 @@ def run_automated_checks(kyc, actor=None, request=None):
 
 
 # ------------------------------------------------------------------ transitions
-@transaction.atomic
-def submit(kyc, request=None):
-    kyc = EmployerKYC.objects.select_for_update().get(pk=kyc.pk)
+def verification_fee():
+    return settings.EMPLOYER_VERIFICATION_FEE
+
+
+def fee_required(kyc):
+    """True while this employer still owes the one-off verification fee."""
+    return verification_fee() > 0 and not kyc.fee_paid
+
+
+def submit(kyc, request=None, gateway=None):
+    """
+    Submit for review. If the verification fee is still owed, start a checkout
+    instead; the review starts when the payment is confirmed.
+    Returns (kyc, authorization_url_or_None, reference_or_None).
+    """
     _require_editable(kyc)
     if not can_submit(kyc):
         raise ValidationError({"detail": "Complete every step before submitting.",
                                "requirements": requirements(kyc)})
+    if fee_required(kyc):
+        return _start_fee_checkout(kyc, request, gateway)
+    return _submit_for_review(kyc, request), None, None
+
+
+def _start_fee_checkout(kyc, request, gateway):
+    from apps.payments.models import PaymentPurpose
+    from apps.payments.services import start_checkout
+
+    fee = verification_fee()
+
+    def link(payment):
+        EmployerKYC.objects.filter(pk=kyc.pk).update(payment=payment, fee_amount=fee,
+                                                     updated_at=timezone.now())
+
+    payment, url = start_checkout(
+        user=kyc.employer.user, purpose=PaymentPurpose.EMPLOYER_VERIFICATION, amount=fee,
+        description="Employer verification fee (Verified Employer review)",
+        gateway=gateway, before_gateway=link, metadata={"kyc_id": str(kyc.id)},
+    )
+    audit.record(kyc, "kyc.checkout_started", request=request, reference=payment.reference)
+    kyc.refresh_from_db()
+    return kyc, url, payment.reference
+
+
+@transaction.atomic
+def _submit_for_review(kyc, request=None):
+    kyc = EmployerKYC.objects.select_for_update().get(pk=kyc.pk)
+    _require_editable(kyc)
     kyc.status = KYCStatus.PENDING
     kyc.submitted_at = timezone.now()
     kyc.rejection_reason = ""
@@ -207,6 +248,25 @@ def submit(kyc, request=None):
                 "Thanks! We're reviewing your documents — usually within 1–2 business days.")
     kyc.refresh_from_db()   # approve() works on its own locked copy
     return kyc
+
+
+def fulfill_employer_verification_fee(payment):
+    """Fee confirmed: record it and send the application for review (idempotent)."""
+    kyc_id = (payment.metadata or {}).get("kyc_id")
+    kyc = EmployerKYC.objects.select_for_update().filter(pk=kyc_id).first() if kyc_id else None
+    if not kyc or kyc.fee_paid_at:
+        return
+    kyc.fee_paid_at = timezone.now()
+    kyc.payment = payment
+    kyc.fee_amount = payment.amount
+    kyc.save(update_fields=["fee_paid_at", "payment", "fee_amount", "updated_at"])
+    audit.record(kyc, "kyc.fee_paid", actor=payment.payer, reference=payment.reference,
+                 amount=str(payment.amount))
+    if kyc.is_editable and can_submit(kyc):
+        _submit_for_review(kyc)
+    else:
+        _notify(kyc, "Verification fee received",
+                "Thanks! Finish any remaining steps and submit — no further payment is needed.")
 
 
 def _sync_badge(kyc, verified):

@@ -7,7 +7,7 @@ from apps.common.audit import history
 from apps.common.phone import InvalidPhone, mask, to_local
 
 from .models import EmployerKYC, KYCDocument
-from .services import can_submit, requirements
+from .services import can_submit, fee_required, requirements, verification_fee
 
 
 def _mask_nin(nin):
@@ -42,6 +42,9 @@ class EmployerKYCSerializer(serializers.ModelSerializer):
     can_submit = serializers.SerializerMethodField()
     checks = serializers.SerializerMethodField()
     status_label = serializers.CharField(source="get_status_display", read_only=True)
+    fee = serializers.SerializerMethodField()
+    fee_paid = serializers.BooleanField(read_only=True)
+    fee_required = serializers.SerializerMethodField()
 
     class Meta:
         model = EmployerKYC
@@ -52,9 +55,10 @@ class EmployerKYCSerializer(serializers.ModelSerializer):
             "business_address", "state", "contact_email", "contact_phone",
             "is_email_verified", "is_phone_verified",
             "checks", "documents", "requirements", "can_submit",
+            "fee", "fee_paid", "fee_required", "fee_paid_at",
             "submitted_at", "reviewed_at", "rejection_reason",
         )
-        read_only_fields = ("id", "status", "submitted_at", "reviewed_at", "rejection_reason")
+        read_only_fields = ("id", "status", "submitted_at", "reviewed_at", "rejection_reason", "fee_paid_at")
 
     def get_director_nin_masked(self, obj):
         return _mask_nin(obj.director_nin)
@@ -64,6 +68,12 @@ class EmployerKYCSerializer(serializers.ModelSerializer):
 
     def get_can_submit(self, obj):
         return can_submit(obj)
+
+    def get_fee(self, obj):
+        return str(obj.fee_amount if obj.fee_paid and obj.fee_amount else verification_fee())
+
+    def get_fee_required(self, obj):
+        return fee_required(obj)
 
     def get_checks(self, obj):
         # Owners see the outcome and message, not the raw provider data.

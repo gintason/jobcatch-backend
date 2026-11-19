@@ -187,6 +187,9 @@ def fulfill_payment(payment):
     elif purpose == PaymentPurpose.VERIFICATION:
         from apps.verification.services import fulfill_verification_fee
         fulfill_verification_fee(payment)
+    elif purpose == PaymentPurpose.EMPLOYER_VERIFICATION:
+        from apps.kyc.services import fulfill_employer_verification_fee
+        fulfill_employer_verification_fee(payment)
     elif purpose == PaymentPurpose.WALLET_TOPUP:
         from apps.billing.services import credit_wallet_from_payment
         credit_wallet_from_payment(payment)
