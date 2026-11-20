@@ -202,8 +202,18 @@ def create_delivery(*, customer, data):
     pickup = point(data["pickup_lat"], data["pickup_lng"])
     dropoff = point(data["dropoff_lat"], data["dropoff_lng"])
     q = quote(pickup=pickup, dropoff=dropoff, vehicle_type=data["vehicle_type"], kind=data["kind"])
-    if data["kind"] == DeliveryKind.ERRAND and not (data.get("errand_details") or "").strip():
-        raise ValidationError({"errand_details": "Tell the rider what to buy."})
+    if data["kind"] == DeliveryKind.ERRAND:
+        # The rider only collects an order the customer has already paid the vendor for.
+        errors = {}
+        if not (data.get("pickup_contact_name") or "").strip():
+            errors["pickup_contact_name"] = "Add the vendor's name so the rider knows who to collect from."
+        if not (data.get("pickup_contact_phone") or "").strip():
+            errors["pickup_contact_phone"] = "Add the vendor's phone number so the rider can call them."
+        if not data.get("order_paid"):
+            errors["order_paid"] = ("Order and pay the vendor first — the rider only picks up "
+                                    "and delivers; riders don't buy items.")
+        if errors:
+            raise ValidationError(errors)
     delivery = Delivery.objects.create(
         customer=customer, kind=data["kind"], vehicle_type=data["vehicle_type"],
         pickup_address=data["pickup_address"], pickup_point=pickup,
@@ -212,7 +222,7 @@ def create_delivery(*, customer, data):
         dropoff_address=data["dropoff_address"], dropoff_point=dropoff,
         recipient_name=data["recipient_name"], recipient_phone=data["recipient_phone"],
         item_description=data["item_description"],
-        errand_details=data.get("errand_details", ""), errand_budget=data.get("errand_budget"),
+        errand_details=data.get("errand_details", ""), errand_budget=None,
         notes=data.get("notes", ""), distance_km=q["distance_km"], fare=q["fare"],
         rider_share=q["rider_share"], platform_share=q["platform_share"],
         delivery_code=f"{secrets.randbelow(10000):04d}")

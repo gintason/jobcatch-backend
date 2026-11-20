@@ -209,12 +209,25 @@ def test_customer_can_cancel_before_pickup_only(client, customer, paystack):
     assert client.post(f"/api/v1/dispatch/deliveries/{d2['id']}/cancel/").json()["status"] == "cancelled"
 
 
-def test_errand_needs_shopping_list(client, customer):
-    r = _book(client, customer, kind="errand")
-    assert r.status_code == 400 and "errand_details" in r.json()
-    ok = _book(client, customer, kind="errand", errand_details="2 packs of jollof rice from Mama Put",
-               errand_budget="6000")
-    assert ok.status_code == 201
+def test_food_pickup_needs_vendor_and_paid_order(client, customer):
+    # Riders never buy items: the customer orders and pays the vendor, the rider only collects.
+    r = _book(client, customer, kind="errand", item_description="2 packs of jollof rice")
+    assert r.status_code == 400
+    errors = r.json()
+    assert {"pickup_contact_name", "pickup_contact_phone", "order_paid"} <= set(errors)
+
+    not_paid = _book(client, customer, kind="errand", item_description="2 packs of jollof rice",
+                     pickup_contact_name="Mama Put", pickup_contact_phone="0803 111 2222")
+    assert not_paid.status_code == 400 and "order_paid" in not_paid.json()
+
+    ok = _book(client, customer, kind="errand", item_description="2 packs of jollof rice",
+               errand_details="Order #A102, under the name Tunde",
+               pickup_contact_name="Mama Put", pickup_contact_phone="0803 111 2222",
+               order_paid=True, errand_budget="6000")
+    assert ok.status_code == 201, ok.json()
+    d = Delivery.objects.get(pk=ok.json()["id"])
+    assert d.errand_budget is None            # riders are never given money to spend
+    assert d.get_kind_display() == "Food & essentials pickup"
 
 
 def test_stale_requests_expire(client, customer):

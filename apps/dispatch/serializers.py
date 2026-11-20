@@ -40,8 +40,11 @@ class DeliveryCreateSerializer(QuoteSerializer):
     recipient_phone = serializers.CharField(max_length=20)
     item_description = serializers.CharField(max_length=255)
     errand_details = serializers.CharField(max_length=2000, required=False, allow_blank=True)
+    # Riders never buy items: this is ignored (kept so older app versions still work).
     errand_budget = serializers.DecimalField(max_digits=12, decimal_places=2, required=False,
                                              allow_null=True, min_value=Decimal("0"))
+    # Food & essentials pickup: the customer confirms they've already paid the vendor.
+    order_paid = serializers.BooleanField(required=False, default=False)
     notes = serializers.CharField(max_length=500, required=False, allow_blank=True)
 
     def validate_recipient_phone(self, v):

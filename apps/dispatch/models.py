@@ -1,11 +1,13 @@
 """
-Dispatch & errand delivery.
+Dispatch: package delivery and food / essentials pickup.
 
 RiderProfile     a rider's vehicle, ID document, payout bank account (a Paystack
                  subaccount) and live location. Admin-approved before they can work.
 DeliveryRate     per-vehicle pricing set by JobCatch: base + per-km, with a minimum.
-Delivery         one job: a package from A to B, or an errand (the rider buys
-                 something and brings it). The customer pays the delivery fee in
+Delivery         one job: a package from A to B, or a food & essentials pickup —
+                 the customer has already ordered AND paid the vendor; the rider
+                 only collects the order and delivers it (riders never buy
+                 anything for customers). The customer pays the delivery fee in
                  the app once the rider confirms pickup; Paystack splits it —
                  the rider's share settles straight to their bank, JobCatch's to
                  ours — so JobCatch never holds the rider's money.
@@ -124,7 +126,8 @@ class DeliveryRate(BaseModel):
 
 class DeliveryKind(models.TextChoices):
     PACKAGE = "package", "Send a package"
-    ERRAND = "errand", "Food & errands"
+    # Stored as "errand" for compatibility; it is a pickup of an already-paid vendor order.
+    ERRAND = "errand", "Food & essentials pickup"
 
 
 class DeliveryStatus(models.TextChoices):
