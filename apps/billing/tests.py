@@ -775,3 +775,64 @@ def test_admin_search_finds_order_by_receipt_number(client, user):
     r = web.get("/admin/billing/billorder/", {"q": order.receipt_number})
     assert r.status_code == 200 and str(order.pk).encode() in r.content
     assert str(order.pk).encode() not in web.get("/admin/billing/billorder/", {"q": "JCB-20260101-00000000"}).content
+
+
+# ------------------------------------------------------------------ VTU.ng rate safety
+def _stuck_orders(user, n):
+    from django.utils import timezone
+
+    for i in range(n):
+        BillOrder.objects.create(user=user, service="airtime", provider="mtn", customer_id="08031234567",
+                                 amount=Decimal("100"), total=Decimal("100"), payment_method="wallet",
+                                 status=BillStatus.PROCESSING, request_id=f"JCB-RQ-{i}",
+                                 provider_order_id=f"BILLX{i}", sent_at=timezone.now())
+    BillOrder.objects.update(updated_at="2000-01-01T00:00:00Z")
+
+
+def test_requery_is_capped_and_not_repeated_too_soon(user):
+    _stuck_orders(user, 20)
+    fake = FakeVTU({})                       # every lookup -> 404
+    with patch.object(VTUClient, "_raw", fake):
+        assert requery_stale_orders(spacing=0) == 15          # capped per run
+        BillOrder.objects.update(updated_at="2000-01-01T00:00:00Z")
+        assert requery_stale_orders(spacing=0) == 5           # only the ones not checked yet
+        assert requery_stale_orders(spacing=0) == 0           # all checked recently
+    assert len(fake.calls) == 20
+
+
+def test_requery_stops_while_vtu_has_paused_us(user):
+    from apps.billing.vtu import COOLDOWN_KEY
+
+    _stuck_orders(user, 3)
+    cache.set(COOLDOWN_KEY, True, 60)
+    fake = FakeVTU({})
+    with patch.object(VTUClient, "_raw", fake):
+        assert requery_stale_orders(spacing=0) == 0
+    assert fake.calls == []
+
+
+def test_refused_key_triggers_cooldown_for_lookups_not_purchases():
+    import io
+    import urllib.error
+
+    from apps.billing.vtu import COOLDOWN_KEY
+
+    err = urllib.error.HTTPError("https://api.vtu.ng/v1/x", 429, "Too Many", {},
+                                 io.BytesIO(b'{"error": {"code": "rate_limited", "message": "slow down"}}'))
+    with override_settings(VTU_API_KEY="k"), patch("urllib.request.urlopen", side_effect=err) as up:
+        status, _ = VTUClient()._raw("GET", "/bills/data-plans")
+        assert status == 429 and cache.get(COOLDOWN_KEY)
+        with pytest.raises(VTUUnknown):
+            VTUClient()._raw("GET", "/bills/data-plans")          # not sent during cooldown
+        assert up.call_count == 1
+        VTUClient()._raw("POST", "/bills/airtime", {"x": 1}, idempotency_key="abc")   # purchases still go
+        assert up.call_count == 2
+
+
+def test_failed_plan_list_is_not_refetched_for_a_minute():
+    fake = FakeVTU({})                       # data-plans -> 404
+    with override_settings(VTU_API_KEY="k"), patch.object(VTUClient, "_raw", fake):
+        for _ in range(3):
+            with pytest.raises(VTUUnknown):
+                VTUClient().data_plans("mtn")
+    assert len(fake.calls) == 1

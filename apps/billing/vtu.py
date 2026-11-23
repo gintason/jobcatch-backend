@@ -128,6 +128,35 @@ def _error(body):
     return "", ""
 
 
+# ------------------------------------------------------------------ rate safety
+# VTU.ng pauses an API key that sends a burst of failing requests (about 10 a
+# minute). These helpers keep us well under that: a refused key triggers a short
+# cooldown, and a failed plan/stock lookup isn't repeated for a minute.
+COOLDOWN_KEY = "vtu1:cooldown"
+COOLDOWN_SECONDS = 180
+FAILURE_TTL = 60
+PAUSE_CODES = {"rate_limited", "too_many_requests", "key_paused", "api_key_paused", "paused",
+               "throttled", "ip_not_allowed", "forbidden", "unauthorized", "invalid_api_key"}
+
+
+def _note_refusal(status, body, path):
+    code, _ = _error(body)
+    if status in (401, 403, 429) or (code or "").lower() in PAUSE_CODES:
+        logger.error("VTU.ng refused %s (%s %s) — pausing non-purchase calls for %ss",
+                     path, status, code, COOLDOWN_SECONDS)
+        cache.set(COOLDOWN_KEY, True, COOLDOWN_SECONDS)
+
+
+def _raise_if_recently_failed(key):
+    failed = cache.get(f"{key}:failed")
+    if failed:
+        raise VTUUnknown(failed, code="recently_failed")
+
+
+def _remember_failure(key, exc):
+    cache.set(f"{key}:failed", str(exc) or "Temporarily unavailable.", FAILURE_TTL)
+
+
 class VTUClient:
     def __init__(self):
         self.base = settings.VTU_BASE_URL.rstrip("/")
@@ -141,6 +170,12 @@ class VTUClient:
         """
         if not settings.VTU_API_KEY:
             raise VTUNotConfigured("Bill payments are not configured yet.", code="not_configured")
+        # While VTU.ng has paused/throttled our key, don't send lookups, plan lists or
+        # verifications (each failure extends the pause). Purchases still go through:
+        # they carry an Idempotency-Key and their outcome is handled by the caller.
+        if not idempotency_key and cache.get(COOLDOWN_KEY):
+            raise VTUUnknown("Bill payments are busy right now. Please try again in a few minutes.",
+                             code="cooldown")
         url = f"{self.base}{path}"
         if params:
             url += f"?{urllib.parse.urlencode(params)}"
@@ -163,6 +198,7 @@ class VTUClient:
                 body = json.loads(exc.read().decode() or "{}")
             except ValueError:
                 body = {}
+            _note_refusal(exc.code, body, path)
             return exc.code, body
         except (urllib.error.URLError, TimeoutError, ValueError) as exc:
             raise VTUUnknown(f"Could not reach the biller: {exc}") from exc
@@ -193,7 +229,12 @@ class VTUClient:
         cached = cache.get(key)
         if cached is not None:
             return cached
-        items = self._get(path, params).get("data") or []
+        _raise_if_recently_failed(key)
+        try:
+            items = self._get(path, params).get("data") or []
+        except VTUError as exc:
+            _remember_failure(key, exc)
+            raise
         cache.set(key, items, CATALOG_TTL)
         return items
 
@@ -212,7 +253,12 @@ class VTUClient:
         cached = cache.get("vtu1:epin-stock")
         if cached is not None:
             return cached
-        body = self._get("/bills/epin-stock", None)
+        _raise_if_recently_failed("vtu1:epin-stock")
+        try:
+            body = self._get("/bills/epin-stock", None)
+        except VTUError as exc:
+            _remember_failure("vtu1:epin-stock", exc)
+            raise
         raw = body.get("stock") if isinstance(body.get("stock"), dict) else (
             (body.get("data") or {}).get("stock") if isinstance(body.get("data"), dict) else None)
         out = {}

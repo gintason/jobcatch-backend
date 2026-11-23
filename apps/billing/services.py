@@ -898,16 +898,48 @@ def requery_order(order):
     return apply_biller_status(order, result.transaction, source="lookup")
 
 
-def requery_stale_orders(min_age_minutes=2, max_age_hours=72):
+# Lookups are spaced so a run can never trip VTU.ng's burst limit (~10 failing
+# requests a minute), capped per run, and older orders are checked less often.
+REQUERY_SPACING_SECONDS = 7
+REQUERY_MAX_PER_RUN = 15
+
+
+def _requery_interval(order, now):
+    """How long to wait between status checks of one order, by its age."""
+    age = now - (order.sent_at or order.created_at)
+    if age < timedelta(hours=1):
+        return timedelta(minutes=10)
+    if age < timedelta(hours=6):
+        return timedelta(hours=1)
+    return timedelta(hours=3)
+
+
+def requery_stale_orders(min_age_minutes=2, max_age_hours=72, spacing=None, max_per_run=None):
+    import time
+
+    from django.core.cache import cache
+
+    from .vtu import COOLDOWN_KEY
+
+    spacing = REQUERY_SPACING_SECONDS if spacing is None else spacing
+    max_per_run = REQUERY_MAX_PER_RUN if max_per_run is None else max_per_run
     now = timezone.now()
     qs = BillOrder.objects.filter(
         status__in=[BillStatus.PROCESSING, BillStatus.QUEUED],
         updated_at__lte=now - timedelta(minutes=min_age_minutes),
         created_at__gte=now - timedelta(hours=max_age_hours),
-    )
+    ).order_by("created_at")
     n = 0
     for order in qs:
+        if n >= max_per_run or cache.get(COOLDOWN_KEY):
+            break                                   # VTU.ng is refusing us — try next run
+        key = f"vtu1:requeried:{order.pk}"
+        if cache.get(key):
+            continue                                # checked recently enough
+        if n:
+            time.sleep(spacing)
         requery_order(order)
+        cache.set(key, True, int(_requery_interval(order, now).total_seconds()))
         n += 1
     return n
 
